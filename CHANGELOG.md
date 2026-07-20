@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Adjusted the Auto Route activation button so it sits in a cleaner top-right column directly below AutoDrill-style mod icons.
+- Increased the activation button slot size for better visual alignment with neighboring HUD icon mods on mobile.
+- Replaced the toolbar drag-handle art with a cleaner four-way move icon that better matches the common Mindustry Tool style.
+
 ## 0.2.1
 
 - Fixed the movable toolbar compilation error against Mindustry/Arc v159.7.

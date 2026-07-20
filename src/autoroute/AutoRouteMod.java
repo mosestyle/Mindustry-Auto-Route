@@ -36,6 +36,10 @@ import java.util.PriorityQueue;
  */
 public class AutoRouteMod extends Mod{
     private static final int[] dirX = {1, 0, -1, 0};
+    private static final float hudButtonSize = 48f;
+    private static final float hudIconSize = 32f;
+    private static final float hudRightPad = 155f;
+    private static final float hudTopPad = 6f;
     private static final int[] dirY = {0, 1, 0, -1};
 
     private static final float turnPenalty = 0.35f;
@@ -81,25 +85,31 @@ public class AutoRouteMod extends Mod{
     }
 
     private void buildHud(){
-        // Match AutoDrill's top-right icon alignment, but place this icon one row
-        // lower so both mods remain visible together on narrow portrait screens.
-        Vars.ui.hudGroup.fill(table -> {
+        // Reserve one icon slot, then place Auto Route directly beneath it so it
+        // lines up with mods such as AutoDrill on the same top-right HUD column.
+        Vars.ui.hudGroup.fill(root -> {
+            root.top().right();
+
+            Table iconColumn = new Table();
+            iconColumn.top().right();
+            iconColumn.defaults().size(hudButtonSize);
+
+            iconColumn.add().size(hudButtonSize);
+            iconColumn.row();
+
             TextureRegionDrawable icon = new TextureRegionDrawable(
                 Core.atlas.find("mindustry-auto-route-icon")
             );
 
-            routeButton = table.button(icon, Styles.emptyTogglei, this::toggleRouting)
-                .size(44f)
+            routeButton = iconColumn.button(icon, Styles.emptyTogglei, this::toggleRouting)
+                .size(hudButtonSize)
                 .get();
 
-            routeButton.resizeImage(30f);
+            routeButton.resizeImage(hudIconSize);
             routeButton.update(() -> routeButton.setChecked(active));
             routeButton.visible(() -> !Vars.state.isMenu());
 
-            table.margin(5f);
-            table.marginRight(155f);
-            table.marginTop(47f);
-            table.top().right();
+            root.add(iconColumn).padTop(hudTopPad).padRight(hudRightPad);
         });
 
         buildMovableRoutePanel();
