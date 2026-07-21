@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3
+
+- Redesigned the expanded routing panel into a compact two-column mobile layout.
+- Reduced portrait width, margins, button heights, and header size.
+- Moved Build into the main action row in expanded mode to make the header narrower.
+- Shortened option labels while preserving orange category accents.
+- Added compact route status text for points, tiles, Junctions, bridges, ore fallback, and intentional links.
+- Added automatic panel relayout when rotating between portrait and landscape.
+- Preserved the collapsible bar and semi-transparent idle behavior.
+
 ## 0.6.2
 
 - Reworked item-output protection into localized isolation bridges.

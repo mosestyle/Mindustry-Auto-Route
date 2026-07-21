@@ -142,6 +142,7 @@ public class AutoRouteMod extends Mod{
     private Table routePanel;
 
     private boolean panelPositionReady;
+    private boolean panelLayoutPortrait;
     private float lastSceneWidth = -1f;
     private float lastSceneHeight = -1f;
 
@@ -366,7 +367,8 @@ public class AutoRouteMod extends Mod{
 
     private void buildMovableRoutePanel(){
         routePanel = new Table(Styles.black6);
-        routePanel.margin(5f);
+        routePanel.margin(3f);
+        panelLayoutPortrait = isPortrait();
         rebuildRoutePanel();
 
         routePanel.visible(() -> active && !Vars.state.isMenu());
@@ -377,10 +379,28 @@ public class AutoRouteMod extends Mod{
     private void updateRoutePanel(){
         updatePanelPlacement();
 
+        // Rebuild the compact grid after rotating the device so portrait and
+        // landscape each use their intended widths.
+        boolean portrait = isPortrait();
+        if(portrait != panelLayoutPortrait){
+            panelLayoutPortrait = portrait;
+            Core.app.post(this::rebuildRoutePanel);
+            return;
+        }
+
         // Keep the map visible underneath the panel. Touching or hovering it
         // restores full opacity, while the collapsed bar is even lighter.
-        float idleAlpha = panelCollapsed ? 0.70f : 0.86f;
+        float idleAlpha = panelCollapsed ? 0.68f : 0.82f;
         routePanel.color.a = routePanel.hasMouse() ? 1f : idleAlpha;
+    }
+
+    private float expandedPanelWidth(){
+        if(!Vars.mobile) return 304f;
+        return isPortrait() ? 248f : 284f;
+    }
+
+    private float compactCellWidth(){
+        return (expandedPanelWidth() - 6f) / 2f;
     }
 
     private void rebuildRoutePanel(){
@@ -389,63 +409,68 @@ public class AutoRouteMod extends Mod{
         boolean preserveTop = routePanel.getWidth() > 0f && routePanel.getHeight() > 0f;
         float oldX = routePanel.x;
         float oldTop = routePanel.getTop();
+        float panelWidth = expandedPanelWidth();
 
         routePanel.clearChildren();
-        routePanel.margin(5f);
+        routePanel.margin(3f);
+        routePanel.defaults().pad(1f);
         optionsButton = null;
         optionsTable = null;
 
         Table header = new Table();
+        header.defaults().pad(1f);
         TextureRegionDrawable moveIcon = new TextureRegionDrawable(
             Core.atlas.find("mindustry-auto-route-move")
         );
 
         ImageButton moveButton = header.button(moveIcon, Styles.defaulti, () -> {})
-            .size(42f)
+            .size(36f)
             .get();
-        moveButton.resizeImage(23f);
+        moveButton.resizeImage(20f);
         addPanelDragListener(moveButton);
 
+        float headerButtons = panelCollapsed ? 36f + 58f + 32f + 32f : 36f + 32f + 32f;
         header.label(this::statusText)
-            .width(Vars.mobile ? (panelCollapsed ? 112f : 138f) : (panelCollapsed ? 170f : 205f))
+            .width(Math.max(92f, panelWidth - headerButtons - 8f))
             .left()
-            .padLeft(5f)
-            .padRight(4f);
+            .wrap()
+            .padLeft(3f)
+            .padRight(2f);
 
-        header.button("Build", Styles.defaultt, this::commitRoute)
-            .size(panelCollapsed ? 68f : 74f, 42f);
+        if(panelCollapsed){
+            header.button("Build", Styles.defaultt, this::commitRoute)
+                .size(58f, 34f);
+        }
 
         collapseButton = header.button(panelCollapsed ? "+" : "-", Styles.cleart, this::togglePanelCollapsed)
-            .size(42f)
+            .size(32f)
             .get();
 
         header.button("X", Styles.cleart, () -> stopRouting(true))
-            .size(42f);
+            .size(32f);
 
-        routePanel.add(header).growX();
+        routePanel.add(header).width(panelWidth).growX();
 
         if(!panelCollapsed){
             routePanel.row();
 
             Table actions = new Table();
-            actions.button("Undo", Styles.cleart, this::undoWaypoint)
-                .width(123f)
-                .height(44f);
-            actions.button("Clear", Styles.cleart, this::clearRoute)
-                .width(123f)
-                .height(44f);
-            routePanel.add(actions).growX();
+            actions.defaults().pad(1f).height(36f).growX();
+            actions.button("Undo", Styles.cleart, this::undoWaypoint);
+            actions.button("Clear", Styles.cleart, this::clearRoute);
+            actions.button("Build", Styles.defaultt, this::commitRoute);
+            routePanel.add(actions).width(panelWidth).growX();
 
             routePanel.row();
             optionsButton = routePanel.button("[accent]Options[] +", Styles.cleart, this::toggleOptions)
-                .growX()
-                .height(40f)
-                .padTop(2f)
+                .width(panelWidth)
+                .height(32f)
                 .get();
 
             routePanel.row();
             optionsTable = new Table();
-            routePanel.add(optionsTable).growX();
+            optionsTable.defaults().pad(1f);
+            routePanel.add(optionsTable).width(panelWidth).growX();
             rebuildOptionsTableContents();
         }
 
@@ -463,7 +488,6 @@ public class AutoRouteMod extends Mod{
         savePanelPosition();
     }
 
-
     private void toggleOptions(){
         optionsExpanded = !optionsExpanded;
         rebuildOptionsTable();
@@ -480,96 +504,107 @@ public class AutoRouteMod extends Mod{
         if(optionsTable == null || optionsButton == null) return;
 
         optionsTable.clearChildren();
+        optionsTable.defaults().pad(1f);
         optionsButton.setText(optionsExpanded ? "[accent]Options[] -" : optionsSummary());
 
-        if(optionsExpanded){
-            oreButton = optionsTable.button("", Styles.cleart, this::cycleOreMode)
-                .growX()
-                .height(40f)
-                .get();
-            oreButton.update(() -> oreButton.setText(oreMode.label));
+        if(!optionsExpanded) return;
 
-            optionsTable.row();
+        float cellWidth = compactCellWidth();
+        float cellHeight = 35f;
 
-            preferenceButton = optionsTable.button("", Styles.cleart, this::cyclePreference)
-                .growX()
-                .height(40f)
-                .get();
-            preferenceButton.update(() -> preferenceButton.setText(preference.label));
+        // Two columns keep every option available while cutting the portrait
+        // panel height almost in half compared with the old one-button-per-row UI.
+        oreButton = optionsTable.button("", Styles.cleart, this::cycleOreMode)
+            .width(cellWidth)
+            .height(cellHeight)
+            .get();
+        oreButton.update(() -> oreButton.setText(compactOreText()));
 
-            optionsTable.row();
+        preferenceButton = optionsTable.button("", Styles.cleart, this::cyclePreference)
+            .width(cellWidth)
+            .height(cellHeight)
+            .get();
+        preferenceButton.update(() -> preferenceButton.setText(compactRouteText()));
 
-            editButton = optionsTable.button("", Styles.clearTogglet, this::toggleEditMode)
-                .growX()
-                .height(40f)
-                .get();
-            editButton.update(() -> {
-                editButton.setChecked(editMode);
-                if(editMode && selectedWaypointIndex >= 0){
-                    editButton.setText("[accent]Edit route:[] move Point " + pointName(selectedWaypointIndex));
-                }else{
-                    editButton.setText(editMode ? "[accent]Edit route:[] select point" : "[accent]Edit route:[] off");
-                }
-            });
+        optionsTable.row();
 
-            optionsTable.row();
-
-            bridgeButton = optionsTable.button("", Styles.clearTogglet, this::toggleBridges)
-                .growX()
-                .height(40f)
-                .get();
-            bridgeButton.update(() -> {
-                bridgeButton.setChecked(bridgesEnabled);
-                bridgeButton.setText(bridgesEnabled ? "[accent]Bridges:[] automatic" : "[accent]Bridges:[] off");
-            });
-
-            optionsTable.row();
-
-            Table forbiddenRow = new Table();
-            forbiddenButton = forbiddenRow.button("", Styles.clearTogglet, this::toggleForbidMode)
-                .width(164f)
-                .height(40f)
-                .get();
-            forbiddenButton.update(() -> {
-                forbiddenButton.setChecked(forbidMode);
-                forbiddenButton.setText(forbidMode ?
-                    "[accent]Forbidden:[] drawing (" + forbiddenTiles.size + ")" :
-                    "[accent]Forbidden tiles:[] " + forbiddenTiles.size
-                );
-            });
-
-            forbiddenRow.button("Reset", Styles.cleart, this::clearForbiddenTiles)
-                .width(82f)
-                .height(40f);
-
-            optionsTable.add(forbiddenRow).growX();
-
-            if(forbidMode){
-                optionsTable.row();
-
-                Table drawRow = new Table();
-                forbiddenDrawButton = drawRow.button("", Styles.clearTogglet, this::toggleForbiddenDrawMode)
-                    .width(123f)
-                    .height(40f)
-                    .get();
-                forbiddenDrawButton.update(() -> {
-                    forbiddenDrawButton.setChecked(!forbiddenDrawMarks);
-                    forbiddenDrawButton.setText(forbiddenDrawMarks ? "[accent]Draw:[] mark" : "[accent]Draw:[] erase");
-                });
-
-                drawRow.button("New line", Styles.cleart, this::newForbiddenChain)
-                    .width(123f)
-                    .height(40f);
-
-                optionsTable.add(drawRow).growX();
+        editButton = optionsTable.button("", Styles.clearTogglet, this::toggleEditMode)
+            .width(cellWidth)
+            .height(cellHeight)
+            .get();
+        editButton.update(() -> {
+            editButton.setChecked(editMode);
+            if(editMode && selectedWaypointIndex >= 0){
+                editButton.setText("[accent]Edit:[] Point " + pointName(selectedWaypointIndex));
+            }else{
+                editButton.setText(editMode ? "[accent]Edit:[] Select" : "[accent]Edit:[] Off");
             }
+        });
+
+        bridgeButton = optionsTable.button("", Styles.clearTogglet, this::toggleBridges)
+            .width(cellWidth)
+            .height(cellHeight)
+            .get();
+        bridgeButton.update(() -> {
+            bridgeButton.setChecked(bridgesEnabled);
+            bridgeButton.setText(bridgesEnabled ? "[accent]Bridge:[] Auto" : "[accent]Bridge:[] Off");
+        });
+
+        optionsTable.row();
+
+        forbiddenButton = optionsTable.button("", Styles.clearTogglet, this::toggleForbidMode)
+            .width(cellWidth)
+            .height(cellHeight)
+            .get();
+        forbiddenButton.update(() -> {
+            forbiddenButton.setChecked(forbidMode);
+            forbiddenButton.setText(forbidMode ?
+                "[accent]Blocked:[] Draw (" + forbiddenTiles.size + ")" :
+                "[accent]Blocked:[] " + forbiddenTiles.size
+            );
+        });
+
+        optionsTable.button("Reset blocked", Styles.cleart, this::clearForbiddenTiles)
+            .width(cellWidth)
+            .height(cellHeight);
+
+        if(forbidMode){
+            optionsTable.row();
+
+            forbiddenDrawButton = optionsTable.button("", Styles.clearTogglet, this::toggleForbiddenDrawMode)
+                .width(cellWidth)
+                .height(cellHeight)
+                .get();
+            forbiddenDrawButton.update(() -> {
+                forbiddenDrawButton.setChecked(!forbiddenDrawMarks);
+                forbiddenDrawButton.setText(forbiddenDrawMarks ? "[accent]Draw:[] Mark" : "[accent]Draw:[] Erase");
+            });
+
+            optionsTable.button("New line", Styles.cleart, this::newForbiddenChain)
+                .width(cellWidth)
+                .height(cellHeight);
         }
     }
 
+    private String compactOreText(){
+        return switch(oreMode){
+            case auto -> "[accent]Ore:[] Auto";
+            case avoid -> "[accent]Ore:[] Never";
+            case allow -> "[accent]Ore:[] Allow";
+        };
+    }
+
+    private String compactRouteText(){
+        return switch(preference){
+            case shortest -> "[accent]Route:[] Short";
+            case straight -> "[accent]Route:[] Straight";
+            case clean -> "[accent]Route:[] Clean";
+        };
+    }
 
     private String optionsSummary(){
         if(isPortrait()) return "[accent]Options[] +";
-        String bridge = bridgesEnabled ? "B" : "-";
+        String bridge = bridgesEnabled ? "Auto bridge" : "No bridge";
         return "[accent]Options:[] " + oreMode.shortLabel + " / " + preference.shortLabel + " / " + bridge + " +";
     }
 
@@ -735,12 +770,11 @@ public class AutoRouteMod extends Mod{
         StringBuilder details = new StringBuilder();
         if(smartCrossings > 0) details.append(" • ").append(smartCrossings).append("J");
         if(smartBridges > 0) details.append(" • ").append(smartBridges).append("B");
-        if(oreFallbackSegments > 0) details.append(" • ore fallback");
-        if(connectionEndpoints > 0) details.append(" • ").append(connectionEndpoints).append(connectionEndpoints == 1 ? " link" : " links");
+        if(oreFallbackSegments > 0) details.append(" • Ore");
+        if(connectionEndpoints > 0) details.append(" • ").append(connectionEndpoints).append("L");
 
         return "[accent]" + routeBlock.localizedName + "[]\n" +
-            waypoints.size + " point" + (waypoints.size == 1 ? "" : "s") +
-            " • " + routePlans.size + " plan" + (routePlans.size == 1 ? "" : "s") + details;
+            waypoints.size + " pts • " + routePlans.size + " tiles" + details;
     }
 
     private void toggleRouting(){

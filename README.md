@@ -17,7 +17,22 @@ https://github.com/mosestyle/Mindustry-Auto-Route
 
 5. Restart Mindustry when prompted.
 
-## Version 0.6.2 highlights
+## Version 0.6.3 highlights
+
+### Compact two-column mobile UI
+
+The expanded Auto Route panel has been redesigned for phones:
+
+- a narrower 248px portrait layout;
+- smaller header, action, and option controls;
+- **Build** moved to the action row so the header is less crowded;
+- options are shown in a two-column grid instead of one tall list;
+- shorter labels such as **Ore: Auto**, **Route: Clean**, and **Bridge: Auto**;
+- compact route status such as `4 pts • 18 tiles • 1J • 1B`;
+- automatic relayout when rotating between portrait and landscape;
+- the existing collapse button and semi-transparent idle behavior are retained.
+
+This keeps every routing control available while using much less vertical space.
 
 ### Local contamination bridges
 
@@ -167,7 +182,7 @@ The included workflow builds one Android-and-desktop-compatible JAR and publishe
 1. Replace your repository files with this project's contents.
 2. Commit and push to `main`.
 3. Open **Actions** and wait for the build to finish.
-4. The workflow creates tag `v0.6.2`, creates the GitHub Release, and attaches `MindustryAutoRoute.jar`.
+4. The workflow creates tag `v0.6.3`, creates the GitHub Release, and attaches `MindustryAutoRoute.jar`.
 
 For later releases, increase the version in both `mod.hjson` and `build.gradle` before pushing.
 
