@@ -26,6 +26,7 @@ import mindustry.ui.Styles;
 import mindustry.ui.dialogs.BaseDialog;
 import mindustry.ui.dialogs.SettingsMenuDialog.SettingsTable;
 
+import java.io.InputStream;
 import java.util.Locale;
 
 /**
@@ -315,22 +316,46 @@ public class CustomMusicPlayer{
     private void importSelectedFiles(Fi[] files){
         int imported = 0;
         int skipped = 0;
+        int failed = 0;
 
         try{
             musicDirectory.mkdirs();
 
             for(Fi source : files){
-                if(source == null || source.isDirectory() || !isSupported(source)){
+                if(source == null || source.isDirectory()){
                     skipped++;
                     continue;
                 }
 
-                String extension = source.extension().toLowerCase(Locale.ROOT);
-                String base = Strings.sanitizeFilename(source.nameWithoutExtension());
-                if(base == null || base.trim().isEmpty()) base = "track";
+                // Android's document picker gives Mindustry a content-URI-backed Fi.
+                // Its path frequently contains an opaque document ID instead of the
+                // original filename, so extension() may be empty even for a valid MP3.
+                String extension = detectedExtension(source);
+                if(extension == null){
+                    skipped++;
+                    continue;
+                }
 
+                String base = safeImportedName(source, imported + skipped + failed + 1);
                 Fi destination = uniqueDestination(base, extension);
-                source.copyTo(destination);
+
+                try(InputStream input = source.read()){
+                    destination.write(input, false);
+                }catch(Throwable copyError){
+                    destination.delete();
+                    failed++;
+                    Log.err("Failed to import custom music file: @", source.path());
+                    Log.err(copyError);
+                    continue;
+                }
+
+                // Never add an empty/failed copy to the library.
+                if(!destination.exists() || destination.length() <= 0L){
+                    destination.delete();
+                    failed++;
+                    continue;
+                }
+
                 imported++;
             }
 
@@ -343,12 +368,86 @@ public class CustomMusicPlayer{
             refreshPanelVisibility();
 
             String message = "Imported " + imported + " track" + (imported == 1 ? "." : "s.");
-            if(skipped > 0) message += " Skipped " + skipped + " unsupported file" + (skipped == 1 ? "." : "s.");
-            Vars.ui.showInfoToast(message, 4f);
+            if(skipped > 0){
+                message += " Skipped " + skipped + " unrecognized/unsupported file" + (skipped == 1 ? "." : "s.");
+            }
+            if(failed > 0){
+                message += " Failed to copy " + failed + " file" + (failed == 1 ? "." : "s.");
+            }
+            if(imported == 0){
+                message += " Try MP3, OGG, WAV or FLAC.";
+            }
+            Vars.ui.showInfoToast(message, imported > 0 ? 4f : 6f);
         }catch(Throwable error){
             Log.err(error);
             Vars.ui.showException("Could not import one or more music files.", error);
         }
+    }
+
+    private String safeImportedName(Fi source, int fallbackNumber){
+        String rawName = source.nameWithoutExtension();
+
+        // Content URIs often end in values such as "audio:12345". Keep a
+        // readable filename when available; otherwise use a stable track name.
+        if(rawName == null) rawName = "";
+        int slash = Math.max(rawName.lastIndexOf('/'), rawName.lastIndexOf('\\'));
+        if(slash >= 0 && slash + 1 < rawName.length()) rawName = rawName.substring(slash + 1);
+        int colon = rawName.lastIndexOf(':');
+        if(colon >= 0 && colon + 1 < rawName.length()) rawName = rawName.substring(colon + 1);
+
+        String base = Strings.sanitizeFilename(rawName);
+        if(base == null || base.trim().isEmpty() || base.matches("\\d+")){
+            base = "track-" + fallbackNumber;
+        }
+        return base;
+    }
+
+    private String detectedExtension(Fi source){
+        String pathExtension = source.extension().toLowerCase(Locale.ROOT);
+        if(isSupportedExtension(pathExtension)) return pathExtension;
+
+        // Detect the actual container from its signature when Android does not
+        // provide the original filename/extension through the document picker.
+        byte[] header = new byte[16];
+        int read = 0;
+
+        try(InputStream input = source.read()){
+            while(read < header.length){
+                int amount = input.read(header, read, header.length - read);
+                if(amount < 0) break;
+                read += amount;
+            }
+        }catch(Throwable error){
+            Log.err("Could not inspect selected music file: @", source.path());
+            Log.err(error);
+            return null;
+        }
+
+        if(read >= 4 && header[0] == 'O' && header[1] == 'g' && header[2] == 'g' && header[3] == 'S'){
+            return "ogg";
+        }
+        if(read >= 4 && header[0] == 'f' && header[1] == 'L' && header[2] == 'a' && header[3] == 'C'){
+            return "flac";
+        }
+        if(read >= 12 && header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F' &&
+            header[8] == 'W' && header[9] == 'A' && header[10] == 'V' && header[11] == 'E'){
+            return "wav";
+        }
+        if(read >= 3 && header[0] == 'I' && header[1] == 'D' && header[2] == '3'){
+            return "mp3";
+        }
+        if(read >= 2 && (header[0] & 0xff) == 0xff && (header[1] & 0xe0) == 0xe0){
+            return "mp3";
+        }
+
+        return null;
+    }
+
+    private boolean isSupportedExtension(String extension){
+        for(String supported : supportedExtensions){
+            if(supported.equalsIgnoreCase(extension)) return true;
+        }
+        return false;
     }
 
     private Fi uniqueDestination(String base, String extension){
@@ -478,11 +577,7 @@ public class CustomMusicPlayer{
     }
 
     private boolean isSupported(Fi file){
-        String extension = file.extension().toLowerCase(Locale.ROOT);
-        for(String supported : supportedExtensions){
-            if(supported.equals(extension)) return true;
-        }
-        return false;
+        return isSupportedExtension(file.extension());
     }
 
     private void onEnabledChanged(boolean enabled){

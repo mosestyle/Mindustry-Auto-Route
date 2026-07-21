@@ -1,10 +1,17 @@
 # Changelog
 
+## 0.8.2
+
+- Fixed Android music imports appearing to complete while leaving the custom library empty.
+- Android document-picker selections may use opaque content-URI paths with no usable filename extension; imports now detect MP3, OGG, WAV, and FLAC from the file signature when necessary.
+- Replaced the generic `copyTo(...)` import path with direct stream copying into the private Mosestyle music folder.
+- Added copy verification so empty or failed files are removed instead of silently appearing successful.
+- Added clearer import results for imported, unsupported, and failed files.
+
 ## 0.8.1
 
 - Fixed the custom music settings build failure against Mindustry v159.7.
-- Updated custom section and action preferences to extend `SettingsMenuDialog.SettingsTable.Setting`, which is the actual nested settings base class in Mindustry v159.7.
-- Removed the now-unused direct `SettingsMenuDialog` import.
+- Updated custom section and action preferences to extend `SettingsMenuDialog.SettingsTable.Setting`, the correct nested settings base class.
 
 ## 0.8.0
 
