@@ -9,6 +9,7 @@ import arc.scene.event.InputEvent;
 import arc.scene.event.InputListener;
 import arc.scene.style.TextureRegionDrawable;
 import arc.scene.ui.ImageButton;
+import arc.scene.ui.Label;
 import arc.scene.ui.TextButton;
 import arc.scene.ui.layout.Table;
 import arc.struct.IntSet;
@@ -20,6 +21,8 @@ import mindustry.game.EventType;
 import mindustry.graphics.Drawf;
 import mindustry.graphics.Pal;
 import mindustry.mod.Mod;
+import mindustry.type.Item;
+import mindustry.type.ItemStack;
 import mindustry.ui.Styles;
 import mindustry.world.Block;
 import mindustry.world.Build;
@@ -28,22 +31,28 @@ import mindustry.world.blocks.distribution.Conveyor;
 import mindustry.world.blocks.distribution.DirectionBridge;
 import mindustry.world.blocks.distribution.Duct;
 import mindustry.world.blocks.distribution.ItemBridge;
+import mindustry.world.blocks.liquid.Conduit;
 import mindustry.world.meta.BlockFlag;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.PriorityQueue;
 
 /**
- * Client-side waypoint router for Mindustry conveyor-style blocks.
+ * Client-side waypoint router for Mindustry item and liquid transport blocks.
  *
  * Features:
  * - smart A* routing with route preferences;
+ * - conveyor, duct, and liquid conduit routing;
+ * - live block/resource cost preview;
+ * - tap-to-select waypoint editing;
  * - automatic ore fallback;
  * - junction and bridge crossings;
  * - player-marked forbidden tiles;
  * - awareness of existing local build plans;
- * - intentional connections to existing conveyor/duct endpoints;
+ * - intentional connections to existing transport endpoints;
  * - mobile-oriented search limits and cached path results.
  */
 public class AutoRouteMod extends Mod{
@@ -94,6 +103,7 @@ public class AutoRouteMod extends Mod{
     private boolean forbiddenStrokeDragged;
     private boolean optionsExpanded;
     private boolean bridgesEnabled = true;
+    private boolean editMode;
     private boolean searchTimedOut;
     private boolean searchLimitHit;
     private Block routeBlock;
@@ -107,6 +117,7 @@ public class AutoRouteMod extends Mod{
     private int forbiddenPointerStartScreenY;
     private int forbiddenPointerLastScreenX;
     private int forbiddenPointerLastScreenY;
+    private int selectedWaypointIndex = -1;
     private boolean searchRetryPass;
     private InputProcessor forbiddenInput;
     private OreMode oreMode = OreMode.auto;
@@ -126,6 +137,7 @@ public class AutoRouteMod extends Mod{
     private TextButton forbiddenButton;
     private TextButton forbiddenDrawButton;
     private TextButton bridgeButton;
+    private TextButton editButton;
     private TextButton optionsButton;
     private Table optionsTable;
     private Table routePanel;
@@ -142,7 +154,11 @@ public class AutoRouteMod extends Mod{
 
         Events.on(EventType.TapEvent.class, event -> {
             if(!active || forbidMode || event.tile == null || event.player != Vars.player || Vars.state.isMenu()) return;
-            addWaypoint(event.tile);
+            if(editMode){
+                handleRouteEditTap(event.tile);
+            }else{
+                addWaypoint(event.tile);
+            }
         });
 
         Events.on(EventType.ResetEvent.class, event -> resetForWorldChange());
@@ -384,6 +400,17 @@ public class AutoRouteMod extends Mod{
 
         routePanel.row();
 
+        Label costLabel = routePanel.label(this::costPreviewText)
+            .colspan(3)
+            .width(Vars.mobile ? 260f : 340f)
+            .left()
+            .padTop(3f)
+            .padBottom(2f)
+            .get();
+        costLabel.setWrap(true);
+
+        routePanel.row();
+
         optionsButton = routePanel.button("[accent]Options[] +", Styles.cleart, this::toggleOptions)
             .colspan(3)
             .growX()
@@ -427,6 +454,21 @@ public class AutoRouteMod extends Mod{
                 .height(40f)
                 .get();
             preferenceButton.update(() -> preferenceButton.setText(preference.label));
+
+            optionsTable.row();
+
+            editButton = optionsTable.button("", Styles.clearTogglet, this::toggleEditMode)
+                .growX()
+                .height(40f)
+                .get();
+            editButton.update(() -> {
+                editButton.setChecked(editMode);
+                if(editMode && selectedWaypointIndex >= 0){
+                    editButton.setText("[accent]Edit route:[] move Point " + pointName(selectedWaypointIndex));
+                }else{
+                    editButton.setText(editMode ? "[accent]Edit route:[] select point" : "[accent]Edit route:[] off");
+                }
+            });
 
             optionsTable.row();
 
@@ -629,12 +671,88 @@ public class AutoRouteMod extends Mod{
         return output.toString();
     }
 
+    private boolean isSupportedRouteBlock(Block block){
+        return block != null && block.size == 1 && block.conveyorPlacement &&
+            (block instanceof Conveyor || block instanceof Duct || block instanceof Conduit);
+    }
+
+    private String costPreviewText(){
+        if(routeBlock == null || waypoints.size < 2 || routePlans.isEmpty()) return "";
+
+        Block junction = junctionReplacement();
+        BridgeSpec bridge = bridgeSpec();
+        int transportBlocks = 0;
+        int junctionBlocks = 0;
+        int bridgeEndpoints = 0;
+        int otherBlocks = 0;
+        LinkedHashMap<Item, Integer> itemCosts = new LinkedHashMap<>();
+
+        for(BuildPlan plan : routePlans){
+            if(plan.block == routeBlock){
+                transportBlocks++;
+            }else if(junction != null && plan.block == junction){
+                junctionBlocks++;
+            }else if(bridge != null && plan.block == bridge.block){
+                bridgeEndpoints++;
+            }else{
+                otherBlocks++;
+            }
+
+            ItemStack[] requirements = plan.block == null ? null : plan.block.requirements;
+            if(requirements != null){
+                for(ItemStack stack : requirements){
+                    if(stack == null || stack.item == null || stack.amount <= 0) continue;
+                    int scaledAmount = Math.round(Vars.state.rules.buildCostMultiplier * stack.amount);
+                    if(scaledAmount <= 0) continue;
+                    Integer current = itemCosts.get(stack.item);
+                    itemCosts.put(stack.item, (current == null ? 0 : current) + scaledAmount);
+                }
+            }
+        }
+
+        StringBuilder blocks = new StringBuilder("[accent]Build preview:[] ");
+        appendCount(blocks, transportBlocks, routeBlock.localizedName);
+        appendCount(blocks, junctionBlocks, junction == null ? "Junction" : junction.localizedName);
+        if(smartBridges > 0){
+            if(blocks.charAt(blocks.length() - 1) != ' ') blocks.append(" • ");
+            blocks.append(smartBridges).append(smartBridges == 1 ? " bridge span" : " bridge spans")
+                .append(" (").append(bridgeEndpoints).append(" endpoints)");
+        }else{
+            appendCount(blocks, bridgeEndpoints, bridge == null ? "Bridge" : bridge.block.localizedName);
+        }
+        appendCount(blocks, otherBlocks, "other block");
+
+        if(itemCosts.isEmpty()) return blocks.toString();
+
+        StringBuilder resources = new StringBuilder("\n[accent]Resources:[] ");
+        boolean first = true;
+        for(Map.Entry<Item, Integer> entry : itemCosts.entrySet()){
+            if(!first) resources.append(" • ");
+            resources.append(entry.getKey().localizedName).append(" ").append(entry.getValue());
+            first = false;
+        }
+        return blocks.append(resources).toString();
+    }
+
+    private void appendCount(StringBuilder builder, int amount, String name){
+        if(amount <= 0) return;
+        if(builder.charAt(builder.length() - 1) != ' ') builder.append(" • ");
+        builder.append(amount).append(" ").append(name);
+    }
+
     private String statusText(){
         if(routeBlock == null) return "[accent]Auto Route[]";
         if(forbidMode){
             String action = forbiddenDrawMarks ? "Mark" : "Erase";
             String hint = forbiddenAnchor == null ? "Tap Point A or drag" : "Tap next point or drag";
             return "[scarlet]" + action + " forbidden tiles[]\n" + hint;
+        }
+        if(editMode){
+            if(waypoints.isEmpty()) return "[accent]Route editing[]\nAdd route points first";
+            if(selectedWaypointIndex >= 0){
+                return "[accent]Move Point " + pointName(selectedWaypointIndex) + "[]\nTap its new tile";
+            }
+            return "[accent]Route editing[]\nTap a waypoint";
         }
         if(waypoints.isEmpty()) return "[accent]" + routeBlock.localizedName + "[]\nTap Point A";
 
@@ -661,8 +779,8 @@ public class AutoRouteMod extends Mod{
         if(Vars.state.isMenu() || Vars.control == null || Vars.control.input == null) return;
 
         Block selected = Vars.control.input.block;
-        if(selected == null || !selected.conveyorPlacement || selected.size != 1){
-            showToast("Select a 1x1 conveyor or duct first, then tap the Auto Route icon.", 4f);
+        if(!isSupportedRouteBlock(selected)){
+            showToast("Select a 1x1 conveyor, duct, or liquid conduit first, then tap the Auto Route icon.", 4f);
             return;
         }
 
@@ -670,6 +788,8 @@ public class AutoRouteMod extends Mod{
         clearRoute();
         active = true;
         forbidMode = false;
+        editMode = false;
+        selectedWaypointIndex = -1;
         forbiddenAnchor = null;
         resetForbiddenStroke();
 
@@ -687,6 +807,8 @@ public class AutoRouteMod extends Mod{
     private void stopRouting(boolean restoreBlock){
         active = false;
         forbidMode = false;
+        editMode = false;
+        selectedWaypointIndex = -1;
         forbiddenAnchor = null;
         resetForbiddenStroke();
         clearRoute();
@@ -699,6 +821,8 @@ public class AutoRouteMod extends Mod{
     private void resetForWorldChange(){
         active = false;
         forbidMode = false;
+        editMode = false;
+        selectedWaypointIndex = -1;
         forbiddenAnchor = null;
         resetForbiddenStroke();
         clearRoute();
@@ -738,6 +862,113 @@ public class AutoRouteMod extends Mod{
         rebuildOptionsTable();
     }
 
+    private void toggleEditMode(){
+        if(waypoints.isEmpty()){
+            editMode = false;
+            selectedWaypointIndex = -1;
+            showToast("Add at least Point A before entering route-edit mode.", 3f);
+            rebuildOptionsTable();
+            return;
+        }
+
+        editMode = !editMode;
+        selectedWaypointIndex = -1;
+        if(editMode){
+            forbidMode = false;
+            forbiddenAnchor = null;
+            resetForbiddenStroke();
+            showToast("Tap a waypoint, then tap its new tile. The neighboring route sections will be recalculated.", 5f);
+        }
+        rebuildOptionsTable();
+    }
+
+    private void handleRouteEditTap(Tile tile){
+        if(tile == null || waypoints.isEmpty()) return;
+
+        int tappedIndex = findWaypointIndex(tile.x, tile.y);
+        if(selectedWaypointIndex < 0){
+            if(tappedIndex < 0){
+                showToast("Tap one of the highlighted route waypoints first.", 3f);
+                return;
+            }
+            selectedWaypointIndex = tappedIndex;
+            showToast("Point " + pointName(tappedIndex) + " selected. Tap its new tile.", 3f);
+            return;
+        }
+
+        if(tappedIndex >= 0){
+            if(tappedIndex == selectedWaypointIndex){
+                selectedWaypointIndex = -1;
+                showToast("Waypoint selection cleared.", 2f);
+            }else{
+                selectedWaypointIndex = tappedIndex;
+                showToast("Point " + pointName(tappedIndex) + " selected. Tap its new tile.", 3f);
+            }
+            return;
+        }
+
+        moveSelectedWaypoint(tile);
+    }
+
+    private int findWaypointIndex(int x, int y){
+        for(int i = 0; i < waypoints.size; i++){
+            Point2 point = waypoints.get(i);
+            if(point.x == x && point.y == y) return i;
+        }
+        return -1;
+    }
+
+    private String pointName(int index){
+        if(index >= 0 && index < 26) return String.valueOf((char)('A' + index));
+        return String.valueOf(index + 1);
+    }
+
+    private void moveSelectedWaypoint(Tile tile){
+        int index = selectedWaypointIndex;
+        if(index < 0 || index >= waypoints.size || tile == null) return;
+        if(findWaypointIndex(tile.x, tile.y) >= 0){
+            showToast("Another waypoint already uses that tile.", 3f);
+            return;
+        }
+        if(!isEndpointUsable(tile.x, tile.y)){
+            showToast("That tile cannot be used as a route point.", 3f);
+            return;
+        }
+
+        Point2 moved = new Point2(tile.x, tile.y);
+        if(index > 0 && manhattan(waypoints.get(index - 1).x, waypoints.get(index - 1).y, moved.x, moved.y) > maxWaypointDistance()){
+            showToast("That would make the previous segment too long. Choose a closer tile.", 4f);
+            return;
+        }
+        if(index < waypoints.size - 1 && manhattan(moved.x, moved.y, waypoints.get(index + 1).x, waypoints.get(index + 1).y) > maxWaypointDistance()){
+            showToast("That would make the next segment too long. Choose a closer tile.", 4f);
+            return;
+        }
+
+        Point2 oldPoint = waypoints.get(index);
+        Seq<PathResult> oldSegments = copySegments();
+        waypoints.set(index, moved);
+        pathCache.clear();
+
+        if(!recalculateAllSegments(true)){
+            waypoints.set(index, oldPoint);
+            segments.clear();
+            segments.addAll(oldSegments);
+            rebuildRouteAndPlans();
+            showToast("That waypoint position has no safe route, so the old position was restored.", 5f);
+            return;
+        }
+
+        selectedWaypointIndex = -1;
+        showToast("Point " + pointName(index) + " moved. Review the updated route before building.", 4f);
+    }
+
+    private Seq<PathResult> copySegments(){
+        Seq<PathResult> copy = new Seq<>();
+        for(PathResult segment : segments) copy.add(segment.copy());
+        return copy;
+    }
+
     private void toggleBridges(){
         boolean previous = bridgesEnabled;
         bridgesEnabled = !bridgesEnabled;
@@ -755,6 +986,10 @@ public class AutoRouteMod extends Mod{
 
     private void toggleForbidMode(){
         forbidMode = !forbidMode;
+        if(forbidMode){
+            editMode = false;
+            selectedWaypointIndex = -1;
+        }
         forbiddenAnchor = null;
         resetForbiddenStroke();
         rebuildOptionsTable();
@@ -991,6 +1226,8 @@ public class AutoRouteMod extends Mod{
         smartBridges = 0;
         oreFallbackSegments = 0;
         connectionEndpoints = 0;
+        editMode = false;
+        selectedWaypointIndex = -1;
         previewPlanFingerprint = queuedPlanFingerprint;
         pathCache.clear();
     }
@@ -1066,7 +1303,7 @@ public class AutoRouteMod extends Mod{
             int key = tileKey(current.x, current.y);
 
             // An explicitly tapped existing/planned transport tile means
-            // "connect here". Do not replace it with another conveyor plan.
+            // "connect here". Do not replace it with another transport plan.
             if(waypointKeys.contains(key) && isConnectionEndpoint(current.x, current.y)) continue;
 
             int rotation;
@@ -1213,7 +1450,7 @@ public class AutoRouteMod extends Mod{
         if(tile.block() == routeBlock && tile.team() == Vars.player.team()) return true;
 
         // A waypoint must never silently replace an unrelated existing
-        // building. Existing compatible conveyors/ducts are handled above as
+        // building. Existing compatible transport blocks are handled above as
         // intentional connection endpoints.
         if(tile.build != null) return false;
 
@@ -1232,7 +1469,7 @@ public class AutoRouteMod extends Mod{
 
         // Re-check merge/drill safety immediately before building. Explicit
         // waypoints are intentional exceptions, and Junction replacements are
-        // expected to occupy an existing conveyor crossing.
+        // expected to occupy an existing transport crossing.
         Block junction = junctionReplacement();
         if(!waypointKeys.contains(key) && plan.block != junction &&
             (isBesideDrill(plan.x, plan.y) ||
@@ -1336,6 +1573,17 @@ public class AutoRouteMod extends Mod{
             Tile anchorTile = Vars.world.tile(forbiddenAnchor.x, forbiddenAnchor.y);
             if(anchorTile != null){
                 Drawf.square(anchorTile.drawx(), anchorTile.drawy(), Vars.tilesize / 2f + 1f, Pal.accent);
+            }
+        }
+
+        if(editMode){
+            for(int i = 0; i < waypoints.size; i++){
+                Point2 waypoint = waypoints.get(i);
+                Tile waypointTile = Vars.world.tile(waypoint.x, waypoint.y);
+                if(waypointTile != null){
+                    float size = i == selectedWaypointIndex ? Vars.tilesize / 2f + 3f : Vars.tilesize / 2f;
+                    Drawf.square(waypointTile.drawx(), waypointTile.drawy(), size, Pal.accent);
+                }
             }
         }
 
@@ -1540,7 +1788,7 @@ public class AutoRouteMod extends Mod{
             for(int nextDirection = 0; nextDirection < 4; nextDirection++){
                 if(forcedStartDirection != -1 && nextDirection != forcedStartDirection) continue;
 
-                if(incomingDirection != 4 && isExistingFriendlyConveyor(currentTile) &&
+                if(incomingDirection != 4 && isExistingFriendlyTransport(currentTile) &&
                     nextDirection != incomingDirection){
                     continue;
                 }
@@ -1704,9 +1952,9 @@ public class AutoRouteMod extends Mod{
                 softCrossings++;
             }
 
-            // One perpendicular conveyor is best solved by a junction. A real
+            // One perpendicular transport crossing is best solved by a junction. A real
             // bridge becomes a candidate for an unplaceable obstacle or for a
-            // cluster of two or more conveyor crossings.
+            // cluster of two or more transport crossings.
             boolean bridgeWorthwhile = hardObstacleSeen || softCrossings >= 2;
             if(!bridgeWorthwhile) continue;
             if(!canPlaceBridgeEndpoint(endX, endY, bridgeDirection, start, goal, spec, strictOre)) continue;
@@ -1791,7 +2039,7 @@ public class AutoRouteMod extends Mod{
             step += allowedOrePenalty;
         }
 
-        if(nextTile != null && isExistingFriendlyConveyor(nextTile) &&
+        if(nextTile != null && isExistingFriendlyTransport(nextTile) &&
             !(nextX == goal.x && nextY == goal.y)){
             step += existingConveyorCrossingPenalty();
         }
@@ -1829,13 +2077,13 @@ public class AutoRouteMod extends Mod{
             return isValidConnectionArrival(x, y, rotation);
         }
 
-        // Check a real conveyor crossing before the generic "fed by transport"
-        // protection. A conveyor in a working line is naturally fed by the belt
+        // Check a real transport crossing before the generic "fed by transport"
+        // protection. A transport block in a working line is naturally fed by the block
         // behind it; treating that as contamination made every normal crossing
         // look like a hard obstacle and forced an unnecessary bridge. A valid
         // perpendicular crossing is safe because it becomes a Junction.
-        if(!isStart && !isGoal && isExistingFriendlyConveyor(tile)){
-            return canCrossExistingConveyor(tile, rotation);
+        if(!isStart && !isGoal && isExistingFriendlyTransport(tile)){
+            return canCrossExistingTransport(tile, rotation);
         }
 
         if(!isStart && !isGoal && isFedByExistingTransport(x, y) &&
@@ -1851,7 +2099,7 @@ public class AutoRouteMod extends Mod{
 
     /**
      * Classifies a potential bridge middle tile.
-     * 0 = ordinary placeable ground, 1 = a junction-capable conveyor crossing,
+     * 0 = ordinary placeable ground, 1 = a junction-capable transport crossing,
      * 2 = a hard obstacle or reserved/planned tile.
      */
     private int bridgeObstacleType(
@@ -1871,12 +2119,12 @@ public class AutoRouteMod extends Mod{
         if(routeKeys.contains(key) && !(x == start.x && y == start.y)) return 2;
         if(isBesideDrill(x, y)) return 2;
 
-        // A connected conveyor normally has another conveyor feeding it. Test
+        // A connected transport line normally has another transport block feeding it. Test
         // whether it can become a Junction first; otherwise the generic feed
         // protection incorrectly classifies a one-tile crossing as a hard
         // obstacle and makes the bridge search win every time.
-        if(isExistingFriendlyConveyor(tile)){
-            return canCrossExistingConveyor(tile, rotation) ? 1 : 2;
+        if(isExistingFriendlyTransport(tile)){
+            return canCrossExistingTransport(tile, rotation) ? 1 : 2;
         }
 
         if(isFedByExistingTransport(x, y) && !isIntentionalConnectionOutputTile(x, y)) return 2;
@@ -1914,15 +2162,15 @@ public class AutoRouteMod extends Mod{
             (tile.block() == spec.block && tile.team() == Vars.player.team());
     }
 
-    private boolean isExistingFriendlyConveyor(Tile tile){
+    private boolean isExistingFriendlyTransport(Tile tile){
         return tile != null && tile.build != null && tile.team() == Vars.player.team() &&
-            (tile.block() instanceof Conveyor || tile.block() instanceof Duct);
+            isCompatibleTransport(tile.block());
     }
 
     /**
      * Returns true when a built or locally planned compatible transport block
      * is pointing directly into this tile. Placing an unrelated automatic
-     * route here would merge its items into the new line.
+     * route here would merge its contents into the new line.
      */
     private boolean isFedByExistingTransport(int x, int y){
         for(int direction = 0; direction < 4; direction++){
@@ -1957,7 +2205,7 @@ public class AutoRouteMod extends Mod{
         return false;
     }
 
-    private boolean canCrossExistingConveyor(Tile tile, int routeRotation){
+    private boolean canCrossExistingTransport(Tile tile, int routeRotation){
         if(tile == null || tile.build == null) return false;
 
         Block replacement = junctionReplacement();
@@ -1965,7 +2213,8 @@ public class AutoRouteMod extends Mod{
 
         boolean compatibleExisting =
             (routeBlock instanceof Conveyor && tile.block() instanceof Conveyor) ||
-            (routeBlock instanceof Duct && tile.block() instanceof Duct);
+            (routeBlock instanceof Duct && tile.block() instanceof Duct) ||
+            (routeBlock instanceof Conduit && tile.block() instanceof Conduit);
         if(!compatibleExisting) return false;
 
         boolean perpendicular = Math.floorMod(tile.build.rotation - routeRotation, 2) == 1;
@@ -1978,6 +2227,7 @@ public class AutoRouteMod extends Mod{
     private Block junctionReplacement(){
         if(routeBlock instanceof Conveyor conveyor) return conveyor.junctionReplacement;
         if(routeBlock instanceof Duct duct) return duct.junctionReplacement;
+        if(routeBlock instanceof Conduit conduit) return conduit.junctionReplacement;
         return null;
     }
 
@@ -1987,6 +2237,9 @@ public class AutoRouteMod extends Mod{
             bridge = conveyor.bridgeReplacement;
         }else if(routeBlock instanceof Duct duct){
             bridge = duct.bridgeReplacement;
+        }else if(routeBlock instanceof Conduit conduit){
+            bridge = conduit.rotBridgeReplacement instanceof DirectionBridge ?
+                conduit.rotBridgeReplacement : conduit.bridgeReplacement;
         }
 
         if(bridge == null || !bridge.unlockedNow() || bridge.isHidden()) return null;
@@ -1996,6 +2249,10 @@ public class AutoRouteMod extends Mod{
     }
 
     private boolean isBesideDrill(int x, int y){
+        // Drills output items, so they are only a contamination hazard for
+        // conveyor/duct routes. Liquid conduits may safely pass beside them.
+        if(routeBlock instanceof Conduit) return false;
+
         for(int direction = 0; direction < 4; direction++){
             Tile nearby = Vars.world.tile(x + dirX[direction], y + dirY[direction]);
             if(nearby == null) continue;
@@ -2021,6 +2278,7 @@ public class AutoRouteMod extends Mod{
         if(block == null) return false;
         if(routeBlock instanceof Conveyor) return block instanceof Conveyor;
         if(routeBlock instanceof Duct) return block instanceof Duct;
+        if(routeBlock instanceof Conduit) return block instanceof Conduit;
         return block == routeBlock;
     }
 
@@ -2055,7 +2313,7 @@ public class AutoRouteMod extends Mod{
             return arrivalDirection == existingRotation;
         }
 
-        // Standard conveyors and ducts accept rear/side input, but not input
+        // Standard conveyors, ducts, and conduits accept rear/side input, but not input
         // from the tile they already output toward.
         return arrivalDirection != Math.floorMod(existingRotation + 2, 4);
     }
@@ -2073,7 +2331,7 @@ public class AutoRouteMod extends Mod{
             int existingRotation = connectionRotation(start.x, start.y);
             if(existingRotation != required){
                 showToast(
-                    "The starting conveyor points another way. Use it as an end point, rotate it, or choose the tile in front of it.",
+                    "The starting transport block points another way. Use it as an end point, rotate it, or choose the tile in front of it.",
                     5f
                 );
                 return false;

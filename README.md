@@ -1,124 +1,6 @@
 # Mindustry Auto Route
 
-A client-side Mindustry mod for Android and desktop. Tap a few waypoints and Auto Route calculates a safe conveyor or duct path, previews it, then adds normal Mindustry build plans.
-
-## Version 0.5.0 highlights
-
-Version 0.5.0 focuses on mobile usability and route reliability:
-
-- **Cleaner GUI:** Options, Ore, Route, Bridges, Forbidden tiles, and Draw labels use Mindustry's orange accent color. The collapsed Options button stays compact in portrait mode.
-- **Pan without leaving Forbidden mode:** on Android, quick-drag moves the map. Hold for about 350 ms and then drag to draw or erase forbidden tiles. Taps still create connected Point A → Point B lines.
-- **Readable portrait messages:** Auto Route instructions and errors automatically wrap onto multiple lines on narrow screens.
-- **More reliable first route:** stale vanilla placement previews are cleared/ignored, and a bounded automatic retry handles rare mobile timing spikes.
-
-All v0.4 features remain included: Junction-first crossings, automatic bridges, automatic ore fallback, forbidden tiles, build-queue awareness, route preferences, intentional connections, drill-output avoidance, movable controls, and Android/desktop support.
-
-## Basic use
-
-1. Select a normal 1x1 conveyor-style block, such as Conveyor, Armored Conveyor, Duct, or Armored Duct.
-2. Tap the Auto Route icon at the top-right of the HUD.
-3. Tap Point A and Point B.
-4. Add extra waypoints when you want to control the general shape.
-5. Review the complete preview.
-6. Tap **Build** to add the plans to Mindustry's normal construction queue.
-
-The route remains editable with **Undo** and **Clear**. Hold the four-way handle to move the panel. Portrait and landscape positions are remembered separately.
-
-## Automatic bridges
-
-Yes, the bridges are real Mindustry bridge blocks rather than a visual trick.
-
-Auto Route uses the selected conveyor or duct's official bridge replacement and its actual range. It places two valid bridge endpoints and preserves the link/configuration in the build queue.
-
-A bridge can be chosen when:
-
-- a wall, pipe, bridge endpoint, factory, small structure, invalid tile, or other hard obstacle blocks a straight section;
-- multiple conveyor lines would otherwise require several junction crossings;
-- an ore patch can be crossed without placing normal conveyors directly on its resource tiles.
-
-A single perpendicular conveyor crossing still prefers a **Junction**. For a cluster of two or more crossings, a bridge becomes a candidate. The chosen bridge must be researched/unlocked, both endpoints must be placeable, and the span must fit within its normal in-game range.
-
-Use **Options → Bridges** to turn automatic bridges on or off. Bridge spans are drawn in the preview before you build.
-
-## Ore modes
-
-Tap the ore option to cycle through:
-
-- **Ore: automatic fallback** — default. First searches for a route that places no normal conveyor on ore. Only if that fails does it retry with a large ore penalty.
-- **Ore: never cross** — no automatic intermediate conveyor may be placed on ore.
-- **Ore: allow with penalty** — ore may be used, but clean ground is strongly preferred.
-
-Explicit waypoints may still be placed on ore. A bridge may pass above ore because it does not place intermediate conveyors on those tiles.
-
-## Route preferences
-
-Tap the route option to cycle through:
-
-- **Shortest** — prioritizes total path length while still applying a small corner penalty.
-- **Straightest** — accepts a somewhat longer route to greatly reduce turns.
-- **Least interference** — strongly avoids existing lines, planned structures, and crowded building edges. This is the default.
-
-## Junctions and existing conveyor lines
-
-- Empty ground is preferred.
-- A single necessary 90-degree crossing of a compatible existing conveyor becomes a Junction.
-- Parallel placement over an existing conveyor is rejected.
-- Automatic intermediate tiles also avoid the output cell of built or planned conveyor/duct lines, preventing an unrelated line from feeding into the new route. Explicit waypoints can still be used for intentional merges.
-- Unrelated routers, bridges, factories, pipes, and other built blocks are never silently replaced.
-- Multiple crowded crossings may be passed with a real bridge when one is available.
-
-## Intentional connections
-
-Tap an existing friendly conveyor/duct, or a compatible conveyor/duct already in your build queue, as Point A or Point B to explicitly connect to it.
-
-- A starting conveyor must point in the route's outgoing direction.
-- A normal conveyor endpoint may be entered from its rear or side, but never head-on from the tile it is already outputting toward.
-- Armored conveyor/duct endpoints must be approached from the valid rear direction; ordinary conveyors and ducts may also accept a side connection.
-- The existing endpoint is kept; Auto Route does not replace it with a duplicate plan.
-
-Ordinary automatically selected tiles still avoid accidental merges.
-
-## Forbidden tiles
-
-Open **Options** and enable **Forbidden tiles**. The controls are designed so you can draw and navigate without repeatedly leaving the mode:
-
-- **Tap-to-tap lines:** tap Point A, then Point B. Every tile between them is marked. Further taps continue from the previous point, so diagonal lines, polygons, circles, and other shapes can be outlined quickly.
-- **Android freehand:** hold one finger still for about 350 ms, then drag. Every crossed tile is marked or erased, with gaps filled automatically.
-- **Android map movement:** quick-drag immediately pans the map without leaving Forbidden mode.
-- **Desktop freehand:** click and drag immediately to draw or erase.
-
-The current tap-to-tap anchor is highlighted. Tap **New line** to finish that chain and start a separate shape somewhere else. Use **Draw: mark / Draw: erase** to switch between adding and removing forbidden tiles.
-
-Forbidden tiles are shown with a red outline. Auto Route will neither place a route on them nor bridge through their airspace. This is useful for reserving room for future factories, defenses, power, liquids, or access paths.
-
-Tap **Reset** to clear all forbidden tiles. Marks are kept for the current loaded world session and clear when the world changes.
-
-## Existing build-plan awareness
-
-Auto Route reads the local player's committed construction queue. Temporary vanilla drag/selection previews are deliberately ignored because stale preview entries could incorrectly block a route.
-
-- Queued structures are treated as occupied.
-- The router may bridge over them when appropriate, but does not overwrite them.
-- A compatible planned conveyor/duct may be tapped intentionally as an endpoint.
-- If the build queue changes after the route was previewed, **Build** recalculates it and asks you to review the updated preview before committing.
-- Build commits are all-or-nothing, preventing half of a bridge pair or another partial route from being queued when the map changes.
-
-## Drill safety
-
-Automatically selected intermediate conveyors are not placed directly beside drills, preventing unrelated drills from dumping items into the new route. Explicit waypoints beside drills remain allowed for intentional connections. Compatible modded blocks carrying Mindustry's drill flag are also recognized.
-
-## Performance protection
-
-To prevent long route calculations from freezing a phone:
-
-- Android segments are limited to 500 Manhattan tiles; desktop allows 1000.
-- Searches stop at a platform-specific node limit.
-- Android searches use a shorter time budget than desktop.
-- A bounded second attempt automatically handles rare first-run timing spikes on reasonably short segments.
-- Recent path results are cached.
-- Very long routes ask you to add an intermediate waypoint.
-
-These limits apply to each waypoint-to-waypoint segment, so extremely long routes are still possible by adding a few waypoints.
+A client-side Mindustry mod for Android and desktop. Tap a few waypoints and Auto Route calculates a safe item or liquid transport path, previews it, then adds normal Mindustry build plans.
 
 ## Install from GitHub
 
@@ -127,13 +9,138 @@ In Mindustry:
 1. Open **Mods**.
 2. Select **Import Mod**.
 3. Select **Import from GitHub**.
-4. Enter:
+4. Paste:
 
 ```text
-YOUR-GITHUB-USERNAME/Mindustry-Auto-Route
+https://github.com/mosestyle/Mindustry-Auto-Route
 ```
 
-Restart Mindustry when prompted.
+5. Restart Mindustry when prompted.
+
+## Version 0.6.0 highlights
+
+### Live resource-cost preview
+
+After Point A and Point B have produced a route, the panel shows what the preview requires before you press **Build**:
+
+- normal conveyors, ducts, or conduits;
+- automatic Junction or Liquid Junction replacements;
+- bridge spans and the number of bridge endpoints;
+- total construction items such as Copper, Lead, Titanium, or Beryllium.
+
+Resource totals follow the loaded world's normal build-cost multiplier. The totals update immediately when you add, undo, or move a waypoint, change route preferences, enable/disable bridges, or edit forbidden tiles.
+
+### Liquid conduit routing
+
+Auto Route now supports Mindustry's normal 1x1 liquid transport lines in addition to item conveyors and ducts:
+
+- Conduit, Pulse Conduit, and Plated Conduit;
+- Reinforced Conduit and compatible modded Conduit subclasses;
+- automatic Liquid Junction crossings;
+- Bridge Conduit or the selected conduit family's official bridge replacement;
+- intentional connections to built or planned compatible conduits;
+- the same ore, obstacle, forbidden-tile, route-preference, bridge, and build-queue rules used by item routes.
+
+Select the conduit normally, then tap the Auto Route icon and place waypoints exactly as you do with conveyors.
+
+### Route editing
+
+Open **Options → Edit route** after adding one or more waypoints:
+
+1. Tap one of the highlighted waypoints.
+2. Tap its new tile.
+3. Auto Route recalculates the affected route while preserving all other waypoints.
+
+If the moved point cannot produce a valid route, its previous position and route are restored automatically. Tap the selected waypoint again to cancel the selection, or turn **Edit route** off to resume adding new waypoints.
+
+## Basic use
+
+1. Select a normal 1x1 supported transport block:
+   - Conveyor family;
+   - Duct family;
+   - Conduit family.
+2. Tap the Auto Route icon at the top-right of the HUD.
+3. Tap Point A and Point B.
+4. Add extra waypoints to control the general shape.
+5. Review the route and resource-cost preview.
+6. Tap **Build** to add the plans to Mindustry's normal construction queue.
+
+Use **Undo** to remove the newest waypoint and **Clear** to reset the route. Hold the four-way handle to move the panel. Portrait and landscape positions are remembered separately.
+
+## Automatic Junctions and bridges
+
+- A single necessary 90-degree crossing of a compatible item line becomes a **Junction**.
+- A single necessary 90-degree crossing of a compatible liquid line becomes a **Liquid Junction**.
+- Empty ground and Junction crossings are preferred over bridges.
+- Bridges are reserved for hard obstacles, crowded multi-line crossings, or spans where a Junction cannot solve the route.
+- Auto Route uses each selected transport block's official Junction and bridge replacements and normal in-game range.
+- Both bridge endpoints are validated and queued together.
+
+Use **Options → Bridges** to enable or disable automatic bridges.
+
+## Ore modes
+
+Tap the ore option to cycle through:
+
+- **Ore: automatic fallback** — first searches for a route that places no normal transport block on ore; retries with a large ore penalty only when necessary.
+- **Ore: never cross** — no automatically selected intermediate transport block may be placed on ore.
+- **Ore: allow with penalty** — ore may be used, but clean ground is strongly preferred.
+
+Explicit waypoints may still be placed on ore. A bridge may pass above ore because it does not place intermediate blocks on those resource tiles.
+
+## Route preferences
+
+Tap the route option to cycle through:
+
+- **Shortest** — prioritizes total path length.
+- **Straightest** — accepts a somewhat longer route to reduce turns.
+- **Least interference** — strongly avoids existing lines, planned structures, and crowded building edges. This is the default.
+
+## Intentional connections
+
+Tap an existing friendly compatible transport block, or one already in your local construction queue, as Point A or Point B to explicitly connect to it.
+
+- A starting transport block must point in the route's outgoing direction.
+- Standard conveyors, ducts, and conduits may accept valid rear or side connections.
+- Armored/plated transports that reject side input must be approached from the valid rear direction.
+- The existing endpoint is kept rather than replaced with a duplicate plan.
+
+Automatically chosen intermediate tiles still avoid accidental merges.
+
+## Forbidden tiles
+
+Open **Options** and enable **Forbidden tiles**:
+
+- **Tap-to-tap lines:** tap Point A, then Point B; every tile between them is marked. Further taps continue the chain.
+- **Android freehand:** hold one finger still for about 350 ms, then drag to mark or erase.
+- **Android map movement:** quick-drag pans the map while Forbidden mode stays enabled.
+- **Desktop freehand:** click and drag immediately.
+
+Use **Draw: mark / Draw: erase**, **New line**, and **Reset** as needed. Forbidden tiles block both ground placement and bridge spans for the current loaded world session.
+
+## Existing build-plan awareness
+
+Auto Route reads the local player's committed construction queue:
+
+- queued structures are treated as occupied;
+- compatible planned transports may be intentional endpoints;
+- unrelated plans are not overwritten;
+- if the queue changes after previewing, Auto Route recalculates and asks you to review the updated route;
+- route commits are all-or-nothing, including bridge pairs.
+
+## Item-route drill safety
+
+Automatically selected item conveyors and ducts are not placed directly beside drills, preventing unrelated drills from dumping resources into the new line. Explicit waypoints beside drills remain allowed. Liquid conduits do not need this restriction.
+
+## Performance protection
+
+- Android segments are limited to 500 Manhattan tiles; desktop allows 1000.
+- Searches stop at platform-specific node and time limits.
+- A bounded second attempt handles rare mobile timing spikes.
+- Recent path results are cached.
+- Very long routes ask for an intermediate waypoint.
+
+These limits apply per waypoint segment, so very long routes remain possible with several waypoints.
 
 ## Automatic GitHub release
 
@@ -141,8 +148,8 @@ The included workflow builds one Android-and-desktop-compatible JAR and publishe
 
 1. Replace your repository files with this project's contents.
 2. Commit and push to `main`.
-3. Open the **Actions** tab and wait for the build to finish.
-4. The workflow creates tag `v0.5.0`, creates the GitHub Release, and attaches `MindustryAutoRoute.jar`.
+3. Open **Actions** and wait for the build to finish.
+4. The workflow creates tag `v0.6.0`, creates the GitHub Release, and attaches `MindustryAutoRoute.jar`.
 
 For later releases, increase the version in both `mod.hjson` and `build.gradle` before pushing.
 
@@ -174,17 +181,12 @@ build/libs/MindustryAutoRoute.jar
 
 ## Current limitations
 
-- The router only works with ordinary 1x1 conveyor-placement blocks.
+- Only ordinary 1x1 Conveyor, Duct, and Conduit families are supported.
 - Automatic bridge support depends on the selected block exposing an unlocked official bridge replacement.
-- It does not automatically place sorters, overflow gates, unloaders, or routers because those change item-flow behavior rather than merely preserving a route.
-- Multiplayer servers may apply their own block bans or placement limits; final placement remains subject to normal Mindustry validation.
+- Auto Route does not place sorters, overflow gates, liquid routers, unloaders, or item routers because these alter distribution behavior rather than simply preserving a line.
+- Forbidden tiles are currently session-based and clear when the world changes.
+- Multiplayer servers may impose block bans or placement limits; final construction remains subject to normal Mindustry validation.
 
 ## License
 
 MIT License. See `LICENSE`.
-
-
-### Junction-first automatic bridges
-
-In **Bridges: automatic** mode, a normal one-tile perpendicular conveyor crossing is handled with a Junction first. Bridges are reserved for hard obstacles or spans that genuinely need them, such as multiple crossings or blocked terrain.
-
