@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.5
+
+- Reworked the Custom Music Library action buttons after the one-line labels caused icon/text overlap on narrow Android screens.
+- Widened the mobile action buttons from 136 to 158 UI units and increased their height slightly.
+- Restored intentional two-line labels for **Import music** and **Remove all**, while keeping **Refresh** and **Back** on one line.
+- Increased spacing between library action buttons for a cleaner portrait layout.
+
 ## 0.8.4
 
 - Fixed the Custom Music Library action labels wrapping vertically on narrow Android screens.

@@ -692,13 +692,13 @@ public class CustomMusicPlayer{
 
         dialog.cont.pane(trackList).grow().maxWidth(620f);
 
-        // Keep every library action on one line on narrow Android displays.
-        // A fixed two-column layout prevents labels such as "Refresh" and
-        // "Remove all" from wrapping vertically inside undersized cells.
-        float actionWidth = Vars.mobile ? 136f : 166f;
-        dialog.buttons.defaults().height(54f).pad(3f);
+        // Use a wider two-column layout on mobile. Long icon buttons use an
+        // intentional two-line label so the icon and text never overlap.
+        float actionWidth = Vars.mobile ? 158f : 176f;
+        float actionHeight = Vars.mobile ? 60f : 56f;
+        dialog.buttons.defaults().height(actionHeight).pad(4f);
 
-        TextButton importButton = dialog.buttons.button("Import music", Icon.download, () -> {
+        TextButton importButton = dialog.buttons.button(Vars.mobile ? "Import\nmusic" : "Import music", Icon.download, () -> {
             dialog.hide();
             importMusic();
         }).width(actionWidth).get();
@@ -718,7 +718,7 @@ public class CustomMusicPlayer{
             openFolderButton.getLabel().setWrap(false);
         }
 
-        TextButton removeAllButton = dialog.buttons.button("Remove all", Icon.trash, () -> {
+        TextButton removeAllButton = dialog.buttons.button(Vars.mobile ? "Remove\nall" : "Remove all", Icon.trash, () -> {
             if(tracks.isEmpty()) return;
             Vars.ui.showConfirm("Remove imported music", "Remove every imported track?", () -> {
                 stopAndDisposeCurrent();
@@ -733,7 +733,7 @@ public class CustomMusicPlayer{
         if(Core.app.isDesktop()) dialog.buttons.row();
 
         TextButton backButton = dialog.buttons.button("Back", Icon.left, dialog::hide)
-            .width(Core.app.isDesktop() ? actionWidth * 2f + 6f : actionWidth)
+            .width(Core.app.isDesktop() ? actionWidth * 2f + 8f : actionWidth)
             .get();
         backButton.getLabel().setWrap(false);
 
