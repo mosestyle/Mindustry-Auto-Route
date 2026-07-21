@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2
+
+- Reworked item-output protection into localized isolation bridges.
+- Routes may still run close to existing conveyors and structures when the nearby tiles are otherwise safe.
+- Tiles that could receive unintended items from drills, routers, sorters, unloaders, smelters, presses, factories, or existing transport outputs are classified separately from hard obstacles.
+- Automatic bridge search now chooses the first safe endpoint after the contamination zone and adds a small span-length cost so the shortest valid bridge wins.
+- Single perpendicular conveyor crossings continue to prefer Junctions.
+- Clean detours are now fallback behavior when a local bridge is unavailable or automatic bridges are disabled.
+
 ## 0.6.1
 
 - Removed the live resource-cost preview to reduce the mobile panel footprint.

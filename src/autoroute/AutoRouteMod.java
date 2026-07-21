@@ -1879,6 +1879,7 @@ public class AutoRouteMod extends Mod{
         if(!canPlaceBridgeEndpoint(x, y, bridgeDirection, start, goal, spec, strictOre)) return;
 
         boolean hardObstacleSeen = false;
+        boolean localizedInterferenceSeen = false;
         int softCrossings = 0;
 
         for(int distance = 2; distance <= spec.range; distance++){
@@ -1922,20 +1923,25 @@ public class AutoRouteMod extends Mod{
                 goal,
                 strictOre
             );
-            if(obstacleType == 2){
+            if(obstacleType == 3){
+                localizedInterferenceSeen = true;
+            }else if(obstacleType == 2){
                 hardObstacleSeen = true;
             }else if(obstacleType == 1){
                 softCrossings++;
             }
 
-            // One perpendicular transport crossing is best solved by a junction. A real
-            // bridge becomes a candidate for an unplaceable obstacle or for a
-            // cluster of two or more transport crossings.
-            boolean bridgeWorthwhile = hardObstacleSeen || softCrossings >= 2;
+            // A single perpendicular transport crossing is still best solved by a
+            // Junction. Item-contamination tiles are different: use the first safe
+            // endpoint after the affected tile(s), producing the shortest possible
+            // local bridge instead of pushing the complete route far away.
+            boolean localizedOnly = localizedInterferenceSeen && !hardObstacleSeen && softCrossings < 2;
+            boolean bridgeWorthwhile = localizedInterferenceSeen || hardObstacleSeen || softCrossings >= 2;
             if(!bridgeWorthwhile) continue;
             if(!canPlaceBridgeEndpoint(endX, endY, bridgeDirection, start, goal, spec, strictOre)) continue;
 
-            float step = distance + bridgePenalty();
+            float step = distance + (localizedOnly ?
+                localizedInterferenceBridgePenalty(distance) : bridgePenalty());
             if(incomingDirection != 4 && incomingDirection != bridgeDirection){
                 step += turnPenalty();
             }
@@ -1957,6 +1963,10 @@ public class AutoRouteMod extends Mod{
                 closed,
                 open
             );
+
+            // For a pure contamination zone, longer spans only cost more resources
+            // and occupy more space. Keep exactly the first valid safe endpoint.
+            if(localizedOnly) break;
         }
     }
 
@@ -2075,8 +2085,11 @@ public class AutoRouteMod extends Mod{
 
     /**
      * Classifies a potential bridge middle tile.
-     * 0 = ordinary placeable ground, 1 = a junction-capable transport crossing,
-     * 2 = a hard obstacle or reserved/planned tile.
+     * 0 = ordinary placeable ground;
+     * 1 = a junction-capable transport crossing;
+     * 2 = a hard obstacle or reserved/planned tile;
+     * 3 = a local item-interference tile that should be isolated with the
+     *     shortest possible bridge rather than a wide detour.
      */
     private int bridgeObstacleType(
         int x,
@@ -2093,17 +2106,16 @@ public class AutoRouteMod extends Mod{
         if(forbiddenKeys.contains(key) || queuedPlansByKey.containsKey(key)) return 2;
         if(strictOre && tile.drop() != null) return 2;
         if(routeKeys.contains(key) && !(x == start.x && y == start.y)) return 2;
-        if(isBesideUnintendedItemOutput(x, y)) return 2;
 
-        // A connected transport line normally has another transport block feeding it. Test
-        // whether it can become a Junction first; otherwise the generic feed
-        // protection incorrectly classifies a one-tile crossing as a hard
-        // obstacle and makes the bridge search win every time.
+        // Always test a real transport crossing before generic item-feed
+        // interference. A working conveyor is naturally fed by the block behind
+        // it, but a valid perpendicular crossing is safe because it becomes a
+        // Junction and must never be upgraded to a bridge unnecessarily.
         if(isExistingFriendlyTransport(tile)){
             return canCrossExistingTransport(tile, rotation) ? 1 : 2;
         }
 
-        if(isFedByExistingTransport(x, y) && !isIntentionalConnectionOutputTile(x, y)) return 2;
+        if(isLocalizedItemInterferenceTile(x, y)) return 3;
         if(tile.build != null) return 2;
 
         return Build.validPlace(routeBlock, Vars.player.team(), x, y, rotation) ? 0 : 2;
@@ -2222,6 +2234,18 @@ public class AutoRouteMod extends Mod{
         if(bridge instanceof ItemBridge itemBridge) return new BridgeSpec(bridge, itemBridge.range);
         if(bridge instanceof DirectionBridge directionBridge) return new BridgeSpec(bridge, directionBridge.range);
         return null;
+    }
+
+    /**
+     * A tile where an ordinary item conveyor could receive items from an
+     * unrelated nearby building or an existing transport output. These tiles
+     * remain blocked for normal ground placement, but bridge search treats them
+     * as a small local isolation zone rather than a reason for a wide detour.
+     */
+    private boolean isLocalizedItemInterferenceTile(int x, int y){
+        if(routeBlock instanceof Conduit) return false;
+        return isBesideUnintendedItemOutput(x, y) ||
+            (isFedByExistingTransport(x, y) && !isIntentionalConnectionOutputTile(x, y));
     }
 
     private boolean isBesideUnintendedItemOutput(int x, int y){
@@ -2401,6 +2425,19 @@ public class AutoRouteMod extends Mod{
             case straight -> 8f;
             case clean -> 20f;
         };
+    }
+
+    private float localizedInterferenceBridgePenalty(int distance){
+        // Keep a local isolation bridge cheaper than walking around a one- or
+        // two-tile contamination zone, while adding a tiny length surcharge so
+        // equal-cost searches choose the shortest bridge span and latest safe
+        // starting endpoint instead of bridging more tiles than necessary.
+        float base = switch(preference){
+            case shortest -> 0.15f;
+            case straight -> 0.10f;
+            case clean -> 0f;
+        };
+        return base + Math.max(0, distance - 2) * 0.12f;
     }
 
     private float bridgePenalty(){

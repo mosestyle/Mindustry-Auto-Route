@@ -17,13 +17,23 @@ https://github.com/mosestyle/Mindustry-Auto-Route
 
 5. Restart Mindustry when prompted.
 
-## Version 0.6.1 highlights
+## Version 0.6.2 highlights
+
+### Local contamination bridges
+
+Item routes may continue running close to existing conveyors and buildings. When only a small section could receive unwanted items from a drill, router, sorter, unloader, smelter, press, or other item-output block, Auto Route now isolates only that section:
+
+1. keep normal conveyors on the safe tiles before the danger area;
+2. place the shortest valid bridge across the affected tile or tiles;
+3. return to normal conveyors immediately after the danger area.
+
+The bridge endpoints must remain on safe tiles. A single clean perpendicular conveyor crossing still uses a **Junction**, not a bridge. Wider detours are now fallback behavior when no valid local bridge is available or automatic bridges are disabled.
 
 ### Compact collapsible panel
 
-The resource-cost preview has been removed to keep the panel small on phones.
+The resource-cost preview remains removed to keep the panel small on phones.
 
-The routing panel now has a **- / +** control in its header:
+The routing panel has a **- / +** control in its header:
 
 - tap **-** to collapse the full menu into a compact bar;
 - the compact bar keeps the move handle, route status, **Build**, expand, and close controls;
@@ -31,17 +41,6 @@ The routing panel now has a **- / +** control in its header:
 - the panel is semi-transparent while idle so the map remains visible underneath;
 - touching or hovering the panel temporarily restores full opacity;
 - the collapsed state is remembered between game launches.
-
-### Safer item-output avoidance
-
-Item routes now avoid ordinary conveyor tiles beside unintended item-output buildings, including:
-
-- drills;
-- routers, sorters, overflow/underflow gates, and unloaders;
-- item-producing factories;
-- compatible modded distribution or factory blocks.
-
-An explicit Point A or Point B may still be placed beside one of these blocks when the connection is intentional. With automatic bridges enabled, the router may bridge across the unsafe output area or choose a clean detour, while keeping the bridge endpoints outside the contamination zone.
 
 ### Liquid conduit routing
 
@@ -87,7 +86,7 @@ Tap **-** to collapse the panel into a compact semi-transparent bar. The compact
 - A single necessary 90-degree crossing of a compatible item line becomes a **Junction**.
 - A single necessary 90-degree crossing of a compatible liquid line becomes a **Liquid Junction**.
 - Empty ground and Junction crossings are preferred over bridges.
-- Bridges are reserved for hard obstacles, crowded multi-line crossings, or spans where a Junction cannot solve the route.
+- Bridges are used for hard obstacles, crowded multi-line crossings, or the shortest local isolation span beside an unintended item output.
 - Auto Route uses each selected transport block's official Junction and bridge replacements and normal in-game range.
 - Both bridge endpoints are validated and queued together.
 
@@ -109,7 +108,7 @@ Tap the route option to cycle through:
 
 - **Shortest** — prioritizes total path length.
 - **Straightest** — accepts a somewhat longer route to reduce turns.
-- **Least interference** — strongly avoids existing lines, planned structures, and crowded building edges. This is the default.
+- **Least interference** — avoids accidental crossings, merges, and planned structures, but may still run parallel beside nearby lines. This is the default.
 
 ## Intentional connections
 
@@ -145,7 +144,9 @@ Auto Route reads the local player's committed construction queue:
 
 ## Item-output safety
 
-Automatically selected item conveyors and ducts are not placed directly beside unintended output buildings such as drills, routers, distribution gates, unloaders, and item-producing factories. This prevents unrelated items from leaking into the new line.
+Automatically selected ordinary conveyors and ducts are not placed on tiles where an unrelated drill, router, distribution block, unloader, smelter, press, or item-producing factory could feed into the route.
+
+With automatic bridges available, Auto Route treats these tiles as a **local isolation zone** rather than avoiding the entire neighborhood. It prefers the shortest bridge with safe endpoints, then resumes normal ground routing. Nearby parallel conveyors and unrelated safe tiles remain usable.
 
 Explicit waypoints beside these buildings remain allowed for intentional connections. Liquid conduits do not need this item-contamination restriction.
 
@@ -166,7 +167,7 @@ The included workflow builds one Android-and-desktop-compatible JAR and publishe
 1. Replace your repository files with this project's contents.
 2. Commit and push to `main`.
 3. Open **Actions** and wait for the build to finish.
-4. The workflow creates tag `v0.6.1`, creates the GitHub Release, and attaches `MindustryAutoRoute.jar`.
+4. The workflow creates tag `v0.6.2`, creates the GitHub Release, and attaches `MindustryAutoRoute.jar`.
 
 For later releases, increase the version in both `mod.hjson` and `build.gradle` before pushing.
 
