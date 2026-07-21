@@ -1,6 +1,6 @@
 # Mosestyle Mindustry Tools
 
-A client-side Mindustry utility suite for Android and desktop by **Mosestyle**. It includes smart Auto Route pathfinding for item and liquid lines, a movable compact core-items and unit HUD, and single-player time control up to x256.
+A client-side Mindustry utility suite for Android and desktop by **Mosestyle**. It includes smart Auto Route pathfinding for item and liquid lines, a movable compact core-items and unit HUD, optional enemy health bars, and single-player time control up to x256.
 
 ## Install from GitHub
 
@@ -18,6 +18,20 @@ mosestyle/Mosestyle-Mindustry-Tools
 Repository: https://github.com/mosestyle/Mosestyle-Mindustry-Tools
 
 5. Restart Mindustry when prompted.
+
+## Version 0.7.4 highlights
+
+### Smarter automatic ore and bridge routing
+
+**Ore: automatic fallback** now distinguishes actual ore overlays from broad resource floors. Sand and dark-sand floors no longer make a tiny route wander around the map or construct bridges merely to avoid the floor. Normal conveyors may cross sand directly.
+
+Actual ore overlays such as copper, lead, coal, titanium, thorium, scrap, beryllium, and tungsten remain protected by the ore modes. A protected ore tile also no longer triggers an automatic bridge by itself: bridges are reserved for real structures, multiple transport crossings, or local item-contamination isolation.
+
+### Optional enemy health bars
+
+Enable **Settings → Mosestyle Tools → Enemy health bars** to display compact bars above damaged enemy units currently visible on screen. Shielded enemies receive a second shield bar. The settings page also includes opacity and size controls.
+
+The implementation uses Mindustry's visible-unit group and native drawing APIs. Its compact approach is inspired by Mindustry Tool's MIT-licensed health-bar visualizer.
 
 ## Version 0.7.3 highlights
 
@@ -47,6 +61,9 @@ Mindustry's main **Settings** menu now contains a **Mosestyle Tools** category. 
 - **Time control** — enables the compact single-player speed control.
 - **Items, units & time HUD opacity** — adjusts the upper-right panel transparency.
 - **Items, units & time HUD width** — makes that movable panel narrower or wider.
+- **Enemy health bars** — shows health and shield bars above damaged enemy units.
+- **Enemy health-bar opacity** — adjusts bar transparency.
+- **Enemy health-bar size** — adjusts bar dimensions.
 
 These options are kept out of the in-game routing panel, so enabling extra HUD tools does not make the route controls larger.
 
@@ -233,7 +250,7 @@ The included workflow builds one Android-and-desktop-compatible JAR and publishe
 1. Replace your repository files with this project's contents.
 2. Commit and push to `main`.
 3. Open **Actions** and wait for the build to finish.
-4. The workflow creates tag `v0.7.3`, creates the GitHub Release, and attaches `MosestyleMindustryTools.jar`.
+4. The workflow creates tag `v0.7.4`, creates the GitHub Release, and attaches `MosestyleMindustryTools.jar`.
 
 For later releases, increase the version in both `mod.hjson` and `build.gradle` before pushing.
 
@@ -274,6 +291,8 @@ build/libs/MosestyleMindustryTools.jar
 ## Credits
 
 The optional HUD concepts were inspired by the open-source **Better Vanilla** core/unit display and time-control UI, and by the original open-source **TimeControl** mod. Mosestyle Mindustry Tools uses its own compact two-column layout and single-player implementation.
+
+The optional enemy health-bar renderer is inspired by **Mindustry Tool**'s MIT-licensed health-bar visualizer (Copyright © 2024 Mindustry Tool).
 
 ## License
 

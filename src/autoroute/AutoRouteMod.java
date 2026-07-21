@@ -144,6 +144,7 @@ public class AutoRouteMod extends Mod{
     private Table optionsTable;
     private Table routePanel;
     private AutoRouteHudExtras hudExtras;
+    private EnemyHealthBars enemyHealthBars;
 
     private boolean panelPositionReady;
     private boolean panelLayoutPortrait;
@@ -157,6 +158,8 @@ public class AutoRouteMod extends Mod{
         buildHud();
         hudExtras = new AutoRouteHudExtras();
         hudExtras.init();
+        enemyHealthBars = new EnemyHealthBars();
+        enemyHealthBars.init();
         installForbiddenInput();
 
         Events.on(EventType.TapEvent.class, event -> {
@@ -222,6 +225,14 @@ public class AutoRouteMod extends Mod{
                 value -> {
                     if(hudExtras != null) hudExtras.onWidthChanged();
                 }
+            );
+
+            table.checkPref(EnemyHealthBars.enabledSetting, false);
+            table.sliderPref(EnemyHealthBars.opacitySetting, 85, 35, 100, 5,
+                value -> value + "%"
+            );
+            table.sliderPref(EnemyHealthBars.scaleSetting, 100, 60, 160, 10,
+                value -> value + "%"
             );
         });
     }
@@ -2228,7 +2239,7 @@ public class AutoRouteMod extends Mod{
         if(incomingDirection != 4 && incomingDirection != nextDirection) step += turnPenalty();
 
         Tile nextTile = Vars.world.tile(nextX, nextY);
-        if(!strictOre && nextTile != null && nextTile.drop() != null &&
+        if(!strictOre && isProtectedOreTile(nextTile) &&
             !(nextX == goal.x && nextY == goal.y)){
             step += allowedOrePenalty;
         }
@@ -2261,7 +2272,7 @@ public class AutoRouteMod extends Mod{
 
         if(forbiddenKeys.contains(key)) return false;
         if(routeKeys.contains(key) && !isStart && !isGoal) return false;
-        if(strictOre && !isGoal && tile.drop() != null) return false;
+        if(strictOre && !isGoal && isProtectedOreTile(tile)) return false;
         if(!isStart && !isGoal && isBesideUnintendedItemOutput(x, y)) return false;
 
         BuildPlan queued = queuedPlansByKey.get(key);
@@ -2297,7 +2308,9 @@ public class AutoRouteMod extends Mod{
      * 1 = a junction-capable transport crossing;
      * 2 = a hard obstacle or reserved/planned tile;
      * 3 = a local item-interference tile that should be isolated with the
-     *     shortest possible bridge rather than a wide detour.
+     *     shortest possible bridge rather than a wide detour;
+     * 4 = protected ore. This blocks normal ground placement in strict ore
+     *     mode, but does not by itself justify constructing a bridge.
      */
     private int bridgeObstacleType(
         int x,
@@ -2312,7 +2325,7 @@ public class AutoRouteMod extends Mod{
         int key = tileKey(x, y);
 
         if(forbiddenKeys.contains(key) || queuedPlansByKey.containsKey(key)) return 2;
-        if(strictOre && tile.drop() != null) return 2;
+        if(strictOre && isProtectedOreTile(tile)) return 4;
         if(routeKeys.contains(key) && !(x == start.x && y == start.y)) return 2;
 
         // Always test a real transport crossing before generic item-feed
@@ -2327,6 +2340,15 @@ public class AutoRouteMod extends Mod{
         if(tile.build != null) return 2;
 
         return Build.validPlace(routeBlock, Vars.player.team(), x, y, rotation) ? 0 : 2;
+    }
+
+    /**
+     * Only ore overlays are protected by the ore modes. Floor resources such
+     * as sand cover huge map regions and treating them as hard ore made tiny
+     * routes take absurd detours or create unnecessary bridges.
+     */
+    private boolean isProtectedOreTile(Tile tile){
+        return tile != null && tile.overlay() != null && tile.overlay().itemDrop != null;
     }
 
     private boolean canPlaceBridgeEndpoint(
@@ -2345,7 +2367,7 @@ public class AutoRouteMod extends Mod{
 
         if(forbiddenKeys.contains(key) || queuedPlansByKey.containsKey(key)) return false;
         if(routeKeys.contains(key) && !(x == start.x && y == start.y)) return false;
-        if(strictOre && tile.drop() != null &&
+        if(strictOre && isProtectedOreTile(tile) &&
             !(x == start.x && y == start.y) && !(x == goal.x && y == goal.y)) return false;
         if(isConnectionEndpoint(x, y)) return false;
         if(isBesideUnintendedItemOutput(x, y) && !(x == start.x && y == start.y) && !(x == goal.x && y == goal.y)) return false;
