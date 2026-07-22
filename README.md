@@ -19,7 +19,15 @@ Repository: https://github.com/mosestyle/Mosestyle-Mindustry-Tools
 
 5. Restart Mindustry when prompted.
 
-## Version 0.9.2 highlights
+## Version 0.9.3 highlights
+
+### Junctions before short bridges
+
+When a later waypoint segment crosses an earlier segment of the same Auto Route preview on one empty tile, the shared tile is now planned as a **Junction** (or **Liquid Junction** for conduits). The mod no longer creates a Bridge Conveyor pair merely to jump over one conveyor tile from its own route.
+
+This keeps one-tile perpendicular crossings compact and cheaper while preserving separate straight lanes. Automatic bridges remain available for real buildings or terrain obstacles, local item-isolation zones, and crowded spans that cross multiple transport lines.
+
+The crossing block is intentionally a Junction rather than a Router: a Router would mix and redistribute the items from both lines, while a Junction keeps the two directions independent.
 
 ### Native selection and complete Upgrade Existing Line scanning
 

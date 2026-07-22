@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.3
+
+- Added Junction-first handling when a later waypoint segment crosses an earlier segment of the same Auto Route preview.
+- A single perpendicular self-crossing on an empty tile now creates one Junction/Liquid Junction plan instead of a two-endpoint bridge.
+- Deduplicated build plans at self-crossing coordinates so only one valid block is queued on the shared tile.
+- Enforced straight-through movement on planned Junction crossings and gave safe self-crossings a small cost so compact Junctions are preferred over wide detours.
+- Kept automatic bridges for real structures, local item-isolation zones, and spans crossing multiple transport lines.
+- Continued using Mindustry's normal Junction replacement for crossings over already-built conveyor, duct, and conduit lines.
+
 ## 0.9.2
 
 - Kept Mindustry's normal selected transport block active while Auto Route is open, restoring the yellow build-menu selection border.

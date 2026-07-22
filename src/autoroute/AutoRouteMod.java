@@ -90,6 +90,7 @@ public class AutoRouteMod extends Mod{
     private final Seq<BridgeLink> routeBridges = new Seq<>();
     private final Seq<BuildPlan> routePlans = new Seq<>();
     private final IntSet routeKeys = new IntSet();
+    private final IntSet routeJunctionKeys = new IntSet();
     private final IntSet waypointKeys = new IntSet();
     private final IntSet connectionWaypointKeys = new IntSet();
 
@@ -2050,6 +2051,7 @@ public class AutoRouteMod extends Mod{
         routeBridges.clear();
         routePlans.clear();
         routeKeys.clear();
+        routeJunctionKeys.clear();
         waypointKeys.clear();
         connectionWaypointKeys.clear();
         clearUpgradeSelection();
@@ -2099,6 +2101,7 @@ public class AutoRouteMod extends Mod{
         routeBridges.clear();
         routePlans.clear();
         routeKeys.clear();
+        routeJunctionKeys.clear();
         waypointKeys.clear();
         connectionWaypointKeys.clear();
         smartCrossings = 0;
@@ -2125,6 +2128,9 @@ public class AutoRouteMod extends Mod{
             if(segment.usedOreFallback) oreFallbackSegments++;
             for(int i = 1; i < segment.points.size; i++) addRouteTile(segment.points.get(i));
             for(BridgeLink bridge : segment.bridges) routeBridges.add(bridge.copy());
+            for(Point2 junction : segment.junctions){
+                routeJunctionKeys.add(tileKey(junction.x, junction.y));
+            }
         }
 
         HashMap<Integer, BuildPlan> plansByKey = new HashMap<>();
@@ -2137,6 +2143,12 @@ public class AutoRouteMod extends Mod{
             // "connect here". Do not replace it with another transport plan.
             if(waypointKeys.contains(key) && isConnectionEndpoint(current.x, current.y)) continue;
 
+            // A later route segment may cross an earlier segment on one empty
+            // tile. Only one build plan may occupy that coordinate; the shared
+            // plan is converted to the selected family's Junction instead of
+            // creating a short, unnecessary bridge over our own route.
+            if(plansByKey.containsKey(key)) continue;
+
             int rotation;
             if(i < routeTiles.size - 1){
                 rotation = direction(current, routeTiles.get(i + 1));
@@ -2146,7 +2158,15 @@ public class AutoRouteMod extends Mod{
                 rotation = 0;
             }
 
-            BuildPlan plan = new BuildPlan(current.x, current.y, rotation, routeBlock);
+            Block plannedBlock = routeJunctionKeys.contains(key) ? junctionReplacement() : routeBlock;
+            if(plannedBlock == null) plannedBlock = routeBlock;
+
+            BuildPlan plan = new BuildPlan(
+                current.x,
+                current.y,
+                plannedBlock == routeBlock ? rotation : 0,
+                plannedBlock
+            );
             routePlans.add(plan);
             plansByKey.put(key, plan);
         }
@@ -2158,10 +2178,11 @@ public class AutoRouteMod extends Mod{
 
     /** Uses Mindustry's official getReplacement logic for perpendicular crossings. */
     private void applySmartCrossingReplacements(){
-        smartCrossings = 0;
+        smartCrossings = routeJunctionKeys.size;
         if(routeBlock == null || routePlans.isEmpty()) return;
 
         for(BuildPlan plan : routePlans){
+            if(plan.block != routeBlock) continue;
             Block replacement = routeBlock.getReplacement(plan, routePlans);
             if(replacement != null && replacement != routeBlock &&
                 replacement.unlockedNow() && !replacement.isHidden()){
@@ -2652,6 +2673,15 @@ public class AutoRouteMod extends Mod{
                     continue;
                 }
 
+                // A Junction crossing must continue straight through both the
+                // built line and an earlier line from this same route preview.
+                // Turning on the shared tile would not be a valid Junction.
+                if(incomingDirection != 4 && routeKeys.contains(tileKey(x, y)) &&
+                    canCrossExistingPlannedRoute(x, y, incomingDirection) &&
+                    nextDirection != incomingDirection){
+                    continue;
+                }
+
                 int nextX = x + dirX[nextDirection];
                 int nextY = y + dirY[nextDirection];
 
@@ -2883,6 +2913,10 @@ public class AutoRouteMod extends Mod{
 
             if(!result.points.isEmpty() && bridgeFromParent[state]){
                 result.bridges.add(new BridgeLink(result.points.peek(), point));
+            }else if(state != startState && state != goalState &&
+                routeKeys.contains(tileKey(point.x, point.y)) &&
+                canCrossExistingPlannedRoute(point.x, point.y, state % 5)){
+                result.junctions.add(new Point2(point.x, point.y));
             }
             result.points.add(point);
         }
@@ -2913,6 +2947,11 @@ public class AutoRouteMod extends Mod{
             step += existingConveyorCrossingPenalty();
         }
 
+        if(routeKeys.contains(tileKey(nextX, nextY)) &&
+            canCrossExistingPlannedRoute(nextX, nextY, nextDirection)){
+            step += plannedRouteCrossingPenalty();
+        }
+
         if(preference == RoutePreference.clean){
             step += nearbyInterferencePenalty(nextX, nextY);
         }
@@ -2935,7 +2974,8 @@ public class AutoRouteMod extends Mod{
         int key = tileKey(x, y);
 
         if(forbiddenKeys.contains(key)) return false;
-        if(routeKeys.contains(key) && !isStart && !isGoal) return false;
+        if(routeKeys.contains(key) && !isStart && !isGoal &&
+            !canCrossExistingPlannedRoute(x, y, rotation)) return false;
         if(strictOre && !isGoal && isProtectedOreTile(tile)) return false;
         if(!isStart && !isGoal && isBesideUnintendedItemOutput(x, y)) return false;
 
@@ -2990,7 +3030,9 @@ public class AutoRouteMod extends Mod{
 
         if(forbiddenKeys.contains(key) || queuedPlansByKey.containsKey(key)) return 2;
         if(strictOre && isProtectedOreTile(tile)) return 4;
-        if(routeKeys.contains(key) && !(x == start.x && y == start.y)) return 2;
+        if(routeKeys.contains(key) && !(x == start.x && y == start.y)){
+            return canCrossExistingPlannedRoute(x, y, rotation) ? 1 : 2;
+        }
 
         // Always test a real transport crossing before generic item-feed
         // interference. A working conveyor is naturally fed by the block behind
@@ -3179,6 +3221,61 @@ public class AutoRouteMod extends Mod{
 
         return Build.validPlace(replacement, Vars.player.team(), tile.x, tile.y, 0) ||
             tile.block() == replacement;
+    }
+
+    /**
+     * Allows a later waypoint segment to cross one earlier segment of the same
+     * Auto Route preview. The earlier segment must pass straight through the
+     * empty tile, and the new segment must be perpendicular. This is the same
+     * shape a Junction represents, so a one-tile self-crossing does not need an
+     * Item Bridge pair.
+     */
+    private boolean canCrossExistingPlannedRoute(int x, int y, int routeRotation){
+        if(routeRotation < 0 || routeRotation > 3) return false;
+
+        Tile tile = Vars.world.tile(x, y);
+        int key = tileKey(x, y);
+        if(tile == null || tile.build != null || queuedPlansByKey.containsKey(key)) return false;
+
+        Block replacement = junctionReplacement();
+        if(replacement == null || !replacement.unlockedNow() || replacement.isHidden()) return false;
+
+        int routeAxis = Math.floorMod(routeRotation, 2);
+        int existingAxes = plannedRouteAxisMaskAt(x, y);
+
+        // Exactly one straight lane must already occupy the tile, and it must
+        // be perpendicular to the new lane. A tile that already contains both
+        // axes is a complete Junction and must not be reused a third time.
+        int requiredExistingAxis = 1 - routeAxis;
+        if(existingAxes != (1 << requiredExistingAxis)) return false;
+
+        return Build.validPlace(replacement, Vars.player.team(), x, y, 0);
+    }
+
+    /** Bit 0 = horizontal lane, bit 1 = vertical lane. */
+    private int plannedRouteAxisMaskAt(int x, int y){
+        int axes = 0;
+        for(int i = 1; i < routeTiles.size - 1; i++){
+            Point2 current = routeTiles.get(i);
+            if(current.x != x || current.y != y) continue;
+
+            Point2 previous = routeTiles.get(i - 1);
+            Point2 next = routeTiles.get(i + 1);
+            int beforeX = current.x - previous.x;
+            int beforeY = current.y - previous.y;
+            int afterX = next.x - current.x;
+            int afterY = next.y - current.y;
+
+            // Bridge endpoints are farther than one tile apart in routeTiles;
+            // they are not ordinary ground lanes and cannot become Junctions.
+            if(Math.abs(beforeX) + Math.abs(beforeY) != 1 ||
+                Math.abs(afterX) + Math.abs(afterY) != 1) continue;
+
+            if(beforeX == afterX && beforeY == afterY){
+                axes |= 1 << (beforeX != 0 ? 0 : 1);
+            }
+        }
+        return axes;
     }
 
     private Block junctionReplacement(){
@@ -3396,6 +3493,18 @@ public class AutoRouteMod extends Mod{
         };
     }
 
+    private float plannedRouteCrossingPenalty(){
+        // Crossing our own preview on one tile is safe once that tile becomes
+        // a Junction, so it should be much cheaper than interfering with an
+        // unrelated built conveyor. Keep a small cost to avoid gratuitous
+        // loops while still preferring the compact Junction over a detour.
+        return switch(preference){
+            case shortest -> 0.35f;
+            case straight -> 0.75f;
+            case clean -> 1.5f;
+        };
+    }
+
     private float localizedInterferenceBridgePenalty(int distance){
         // Keep a local isolation bridge cheaper than walking around a one- or
         // two-tile contamination zone, while adding a tiny length surcharge so
@@ -3566,6 +3675,7 @@ public class AutoRouteMod extends Mod{
     private static final class PathResult{
         final Seq<Point2> points = new Seq<>();
         final Seq<BridgeLink> bridges = new Seq<>();
+        final Seq<Point2> junctions = new Seq<>();
         boolean usedOreFallback;
 
         PathResult copy(){
@@ -3575,6 +3685,9 @@ public class AutoRouteMod extends Mod{
             }
             for(BridgeLink bridge : bridges){
                 copy.bridges.add(bridge.copy());
+            }
+            for(Point2 junction : junctions){
+                copy.junctions.add(new Point2(junction.x, junction.y));
             }
             copy.usedOreFallback = usedOreFallback;
             return copy;
