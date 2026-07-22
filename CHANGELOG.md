@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.5
+
+- Made the movable custom music player substantially narrower so it fits more comfortably along the right side of portrait Android screens.
+- Replaced the wide **Shuffle** text button with a compact dedicated shuffle icon while preserving its toggle state.
+- Added true label ellipsis handling for long song names, keeping all track text clipped inside the player overlay.
+- Removed the unnecessary **Vol** text and tightened the previous, play/pause, next, shuffle, slider, and percentage spacing.
+- Kept the existing four-way drag handle, independent portrait/landscape positions, playback controls, and custom volume behavior.
+
 ## 0.9.4
 
 - Reworked Upgrade Existing Line into an additive multi-line selection mode: tap several conveyor, duct, or conduit lines and press Build once to queue every deduplicated replacement.

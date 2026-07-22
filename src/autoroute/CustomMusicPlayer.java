@@ -18,6 +18,7 @@ import arc.scene.ui.Slider;
 import arc.scene.ui.TextButton;
 import arc.scene.ui.layout.Table;
 import arc.struct.Seq;
+import arc.util.Align;
 import arc.util.Log;
 import arc.util.Strings;
 import mindustry.Vars;
@@ -68,7 +69,7 @@ public class CustomMusicPlayer{
 
     private Table playerPanel;
     private ImageButton playPauseButton;
-    private TextButton shuffleButton;
+    private ImageButton shuffleButton;
     private Slider volumeSlider;
     private Label volumeLabel;
 
@@ -147,6 +148,8 @@ public class CustomMusicPlayer{
     }
 
     private void buildPlayerPanel(){
+        final float contentWidth = 160f;
+
         playerPanel = new Table(Styles.black6);
         playerPanel.margin(4f);
         playerPanel.visible(this::shouldShowControls);
@@ -163,43 +166,50 @@ public class CustomMusicPlayer{
             Core.atlas.find("mindustry-auto-route-move")
         );
         ImageButton moveButton = header.button(moveIcon, Styles.cleari, () -> {})
-            .size(30f)
+            .size(28f)
             .get();
-        moveButton.resizeImage(19f);
+        moveButton.resizeImage(18f);
         addPanelDragListener(moveButton);
 
-        header.label(this::displayTrackName)
-            .width(186f)
+        Label trackLabel = new Label(this::displayTrackName);
+        trackLabel.setAlignment(Align.left);
+        trackLabel.setEllipsis(true);
+        trackLabel.setWrap(false);
+        header.add(trackLabel)
+            .width(130f)
+            .height(28f)
             .left()
-            .padLeft(3f);
+            .padLeft(2f);
 
-        playerPanel.add(header).width(220f).height(30f).left();
+        playerPanel.add(header).width(contentWidth).height(28f).left();
         playerPanel.row();
 
         Table controls = new Table();
-        controls.defaults().height(36f).pad(1f);
+        controls.defaults().size(32f).pad(0f);
 
         controls.button(Icon.left, Styles.cleari, this::previousTrack)
-            .size(36f);
+            .size(32f);
 
         playPauseButton = controls.button(Icon.play, Styles.cleari, this::togglePlayPause)
-            .size(36f)
+            .size(32f)
             .get();
 
         controls.button(Icon.right, Styles.cleari, () -> nextTrack(false))
-            .size(36f);
+            .size(32f);
 
-        shuffleButton = controls.button("Shuffle", Styles.clearTogglet, this::toggleShuffle)
-            .width(76f)
-            .height(36f)
+        TextureRegionDrawable shuffleIcon = new TextureRegionDrawable(
+            Core.atlas.find("mindustry-auto-route-shuffle")
+        );
+        shuffleButton = controls.button(shuffleIcon, Styles.emptyTogglei, this::toggleShuffle)
+            .size(32f)
             .get();
+        shuffleButton.resizeImage(18f);
 
-        playerPanel.add(controls).width(220f).left();
+        playerPanel.add(controls).width(contentWidth).height(32f).center();
         playerPanel.row();
 
         Table volume = new Table();
         volume.left();
-        volume.add("Vol").width(30f).left();
 
         volumeSlider = new Slider(0f, 100f, 5f, false);
         volumeSlider.setValue(Core.settings.getInt(volumeSetting, 75));
@@ -208,12 +218,12 @@ public class CustomMusicPlayer{
             Core.settings.put(volumeSetting, value);
             applyCustomVolume();
         });
-        volume.add(volumeSlider).width(142f).height(30f);
+        volume.add(volumeSlider).width(120f).height(28f);
 
         volumeLabel = new Label(volumeText(), Styles.outlineLabel);
-        volume.add(volumeLabel).width(44f).right();
+        volume.add(volumeLabel).width(40f).right();
 
-        playerPanel.add(volume).width(220f).height(34f).left();
+        playerPanel.add(volume).width(contentWidth).height(30f).left();
         playerPanel.row();
 
         Vars.ui.hudGroup.addChild(playerPanel);
@@ -1014,7 +1024,7 @@ public class CustomMusicPlayer{
         if(track == null){
             return tracks.isEmpty() ? "No music imported" : "Ready";
         }
-        return shorten(track.nameWithoutExtension(), 29);
+        return track.nameWithoutExtension();
     }
 
     private String volumeText(){
