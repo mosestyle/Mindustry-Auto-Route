@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.4
+
+- Reworked Upgrade Existing Line into an additive multi-line selection mode: tap several conveyor, duct, or conduit lines and press Build once to queue every deduplicated replacement.
+- Tapping any transport tile already covered by a selected line removes that selection; Undo removes only the most recently added line, while Clear removes all upgrade selections.
+- Added direction-aware Junction and Liquid Junction traversal. Consecutive Junction chains are followed straight through without converting or redesigning the player's special blocks.
+- Tracks horizontal and vertical Junction lanes independently, preventing a perpendicular crossing lane from blocking the selected lane during a connected-line scan.
+- Continues through linked Bridge Conveyor, Duct Bridge, and Bridge Conduit endpoints before or after consecutive Junctions.
+- Added safe connector branching: routers and other transport connectors with one clear continuation are followed automatically, while genuinely ambiguous branches are highlighted and left untouched until the player taps the desired continuation as another selection.
+- Deduplicated overlapping replacement plans, preserved-special highlights, and ambiguous-branch markers across all selected lines.
+- Added combined status and build messages showing selected line count, total replacements, preserved special blocks, and unresolved branching connectors.
+
 ## 0.9.3
 
 - Added Junction-first handling when a later waypoint segment crosses an earlier segment of the same Auto Route preview.

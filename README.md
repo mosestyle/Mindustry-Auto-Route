@@ -29,24 +29,25 @@ This keeps one-tile perpendicular crossings compact and cheaper while preserving
 
 The crossing block is intentionally a Junction rather than a Router: a Router would mix and redistribute the items from both lines, while a Junction keeps the two directions independent.
 
-### Native selection and complete Upgrade Existing Line scanning
+### Direction-aware, multi-line Upgrade Existing Line
 
-The Auto Route panel can be opened without selecting a transport block first. When you do select a Conveyor, Duct, or Conduit, Mindustry's normal yellow build-menu selection border remains visible while Auto Route is open. The mod suppresses ordinary placement only while you touch the map, so waypoint and upgrade taps do not create duplicate vanilla plans.
+The Auto Route panel can be opened without selecting a transport block first. When you select a Conveyor, Duct, or Conduit, Mindustry's normal yellow build-menu selection border remains visible while Auto Route is open. The mod suppresses ordinary placement only while you touch the map, so upgrade taps do not create duplicate vanilla plans.
 
-Upgrade mode accepts the source line and replacement block in either order:
+Upgrade mode accepts the source lines and replacement block in either order:
 
 1. Activate Auto Route at any time.
 2. Open **Options** and enable **Upgrade line**.
-3. Tap any ordinary conveyor, duct, or conduit on the existing line.
-4. Select the desired replacement from the normal build menu, such as **Titanium Conveyor**. You may also select the replacement before tapping the line.
-5. Review the highlighted replacement preview.
-6. Press **Build**.
+3. Tap one or more ordinary conveyors, ducts, or conduits. Every tap adds another line or disconnected section to the same preview.
+4. Select the desired replacement from the normal build menu, such as **Titanium Conveyor**. You may select it before or after adding lines.
+5. Review the combined highlighted preview and press **Build** once.
 
-Selecting an ordinary Conveyor first no longer locks the upgrade target to Conveyor. The tapped tile identifies the source family, while the latest compatible transport selected from the build menu becomes the replacement. You may tap either an older conveyor or a tile that already uses the target tier; mixed-tier lines continue through matching tiles and replace the remaining blocks. Upgrades and downgrades both work.
+Tap any ordinary transport tile already covered by a selected line to remove that line. **Undo** removes only the most recently added selection; **Clear** removes every selection. Overlapping selections and replacement plans are deduplicated automatically.
 
-The scanner now follows the entered lane straight through Junctions and Liquid Junctions without depending on conveyor rotation, and continues through linked bridge pairs, Routers, Sorters, gates, Duct Routers, and compatible one-tile transport connectors. Those special blocks are preserved rather than replaced.
+The scanner remembers the direction from which it entered a Junction or Liquid Junction and always leaves through the opposite side. Horizontal and vertical Junction lanes have independent visited states, so chains such as `Conveyor → Junction → Junction → Conveyor` are followed correctly without replacing the Junctions with bridges. The same directional scan continues through linked bridge endpoints before or after Junction chains.
 
-The detector now follows the connected network through linked bridge pairs, straight Junction lanes, routers, sorters, overflow/underflow gates, duct routers, and compatible one-tile transport nodes. These special blocks are preserved rather than replaced. When a router genuinely branches, all attached compatible branches are highlighted so the preview remains transparent before you press **Build**. Factories, drills, cores, and unrelated storage networks are still boundaries.
+Routers, Sorters, gates, Duct Routers, and compatible one-tile transport connectors remain preserved. A connector with one clear continuation is followed automatically. When several continuations are possible, the connector is highlighted as an ambiguous branch and the scan stops there instead of silently absorbing another resource network. Tap the desired conveyor after that connector to add it as another selection.
+
+Selecting a tile that already uses the target tier is allowed: it remains part of the scan and connects older sections that still need replacement. Upgrades and downgrades both work, while special transport blocks are preserved rather than redesigned.
 
 ## Version 0.8.2 highlights
 

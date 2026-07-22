@@ -37,6 +37,7 @@ import mindustry.world.meta.BlockGroup;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.PriorityQueue;
 
 /**
@@ -94,10 +95,13 @@ public class AutoRouteMod extends Mod{
     private final IntSet waypointKeys = new IntSet();
     private final IntSet connectionWaypointKeys = new IntSet();
 
+    private final Seq<UpgradeSelection> upgradeSelections = new Seq<>();
     private final Seq<BuildPlan> upgradePlans = new Seq<>();
     private final Seq<Point2> upgradeSpecialTiles = new Seq<>();
+    private final Seq<Point2> upgradeAmbiguousTiles = new Seq<>();
     private final IntSet upgradeKeys = new IntSet();
     private final IntSet upgradeSpecialKeys = new IntSet();
+    private final IntSet upgradeAmbiguousKeys = new IntSet();
 
     private final Seq<Point2> forbiddenTiles = new Seq<>();
     private final IntSet forbiddenKeys = new IntSet();
@@ -121,9 +125,7 @@ public class AutoRouteMod extends Mod{
     private boolean searchTimedOut;
     private boolean searchLimitHit;
     private Block routeBlock;
-    private Block upgradeSourceBlock;
     private TransportFamily upgradeSourceFamily;
-    private Point2 upgradeAnchor;
     private Point2 forbiddenAnchor;
     private Point2 forbiddenStrokeStart;
     private Point2 forbiddenStrokeLast;
@@ -148,6 +150,7 @@ public class AutoRouteMod extends Mod{
     private int oreFallbackSegments;
     private int connectionEndpoints;
     private int upgradePreservedSpecials;
+    private int upgradeAmbiguousConnectors;
     private int forbiddenRevision;
     private int queuedPlanFingerprint;
     private int previewPlanFingerprint;
@@ -1050,16 +1053,20 @@ public class AutoRouteMod extends Mod{
 
     private String statusText(){
         if(upgradeMode){
-            if(upgradeAnchor == null){
+            if(upgradeSelections.isEmpty()){
                 String target = routeBlock == null ? "Choose replacement" : "Upgrade to " + routeBlock.localizedName;
-                return "[accent]" + target + "[]\nTap an existing line";
+                return "[accent]" + target + "[]\nTap one or more existing lines";
             }
             if(routeBlock == null || upgradeSourceFamily == null ||
                 transportFamily(routeBlock) != upgradeSourceFamily){
-                return "[accent]Line selected[]\nChoose a replacement block";
+                return "[accent]" + upgradeSelections.size + " line" + (upgradeSelections.size == 1 ? "" : "s") + " selected[]\nChoose a compatible replacement";
             }
-            return "[accent]Upgrade to " + routeBlock.localizedName + "[]\n" +
-                upgradePlans.size + " replacements • " + upgradePreservedSpecials + " kept";
+            String details = upgradeSelections.size + " line" + (upgradeSelections.size == 1 ? "" : "s") +
+                " • " + upgradePlans.size + " replacements • " + upgradePreservedSpecials + " kept";
+            if(upgradeAmbiguousConnectors > 0){
+                details += " • " + upgradeAmbiguousConnectors + " branch" + (upgradeAmbiguousConnectors == 1 ? "" : "es");
+            }
+            return "[accent]Upgrade to " + routeBlock.localizedName + "[]\n" + details;
         }
         if(routeBlock == null) return "[accent]Auto Route[]\nSelect a transport block";
         if(forbidMode){
@@ -1220,8 +1227,8 @@ public class AutoRouteMod extends Mod{
 
         if(upgradeMode){
             showToast(
-                "Upgrade mode enabled. Tap an existing transport line, then choose its replacement block before or after selecting the line.",
-                6f
+                "Upgrade mode enabled. Tap one or more existing lines to add them. Tap a selected line again to remove it; Undo removes the latest line, and Build upgrades everything together.",
+                8f
             );
         }
         rebuildOptionsTable();
@@ -1243,10 +1250,10 @@ public class AutoRouteMod extends Mod{
         pathCache.clear();
 
         if(upgradeMode){
-            if(upgradeAnchor != null){
-                rebuildUpgradePreviewFromAnchor(true);
+            if(!upgradeSelections.isEmpty()){
+                rebuildAllUpgradePreviews(true);
             }else{
-                showToast("Replacement selected: " + routeBlock.localizedName + ". Tap any existing compatible line.", 4f);
+                showToast("Replacement selected: " + routeBlock.localizedName + ". Tap one or more existing compatible lines.", 4f);
             }
         }else{
             clearRoute();
@@ -1266,108 +1273,154 @@ public class AutoRouteMod extends Mod{
             return;
         }
 
-        clearUpgradeSelection();
-        upgradeAnchor = new Point2(tile.x, tile.y);
-        upgradeSourceBlock = tile.block();
-        upgradeSourceFamily = transportFamily(upgradeSourceBlock);
+        int tappedKey = tileKey(tile.x, tile.y);
+        for(int i = upgradeSelections.size - 1; i >= 0; i--){
+            UpgradeSelection existing = upgradeSelections.get(i);
+            if(existing.containsTransportKey(tappedKey)){
+                upgradeSelections.remove(i);
+                rebuildUpgradeAggregate();
+                showToast(
+                    "Removed line " + (i + 1) + ". " + upgradeSelections.size + " line" +
+                        (upgradeSelections.size == 1 ? " remains selected." : "s remain selected."),
+                    4f
+                );
+                rebuildRoutePanel();
+                return;
+            }
+        }
 
-        if(routeBlock == null){
+        TransportFamily family = transportFamily(tile.block());
+        // Existing additive selections must share one family, but a stale or
+        // incompatible build-menu target must not prevent the first line from
+        // being selected. This keeps source-first and replacement-first use
+        // equally reliable.
+        if(upgradeSourceFamily != null && family != upgradeSourceFamily){
             showToast(
-                "Line selected. Now choose the replacement conveyor, duct, or conduit from the build menu.",
+                "The current upgrade selection uses the " + upgradeFamilyName(upgradeSourceFamily) +
+                    " family. Clear it before selecting a different transport family.",
+                5f
+            );
+            return;
+        }
+
+        UpgradeSelection selection = new UpgradeSelection(tile, family);
+        upgradeSelections.add(selection);
+        upgradeSourceFamily = family;
+
+        if(routeBlock == null || transportFamily(routeBlock) != family){
+            rebuildUpgradeAggregate();
+            showToast(
+                "Added line " + upgradeSelections.size + ". Choose a compatible " + upgradeFamilyName(family) +
+                    " replacement, or tap more lines from the same family.",
                 5f
             );
             rebuildRoutePanel();
             return;
         }
 
-        if(transportFamily(routeBlock) != upgradeSourceFamily){
-            showToast(
-                "This line is a " + upgradeFamilyName() + " line. Choose a compatible replacement from the same transport family.",
-                5f
-            );
-            rebuildRoutePanel();
-            return;
-        }
-
-        rebuildUpgradePreviewFromAnchor(false);
+        refreshQueuedPlanSnapshot();
+        scanUpgradeSelection(selection);
+        rebuildUpgradeAggregate();
+        showUpgradeScanResult(false);
+        rebuildRoutePanel();
     }
 
-    private void rebuildUpgradePreviewFromAnchor(boolean announceTarget){
-        if(upgradeAnchor == null) return;
-
-        Tile anchorTile = Vars.world.tile(upgradeAnchor.x, upgradeAnchor.y);
-        if(anchorTile == null || anchorTile.build == null || anchorTile.team() != Vars.player.team() ||
-            transportFamily(anchorTile.block()) != upgradeSourceFamily){
-            clearUpgradeSelection();
-            showToast("The selected transport line no longer exists.", 4f);
+    private void rebuildAllUpgradePreviews(boolean announceTarget){
+        if(upgradeSelections.isEmpty()){
+            clearUpgradePreview();
             return;
         }
 
-        // The line may have partially changed while the preview was open.
-        upgradeSourceBlock = anchorTile.block();
-        clearUpgradePreview();
+        for(int i = upgradeSelections.size - 1; i >= 0; i--){
+            UpgradeSelection selection = upgradeSelections.get(i);
+            Tile anchorTile = Vars.world.tile(selection.anchor.x, selection.anchor.y);
+            if(anchorTile == null || anchorTile.build == null || anchorTile.team() != Vars.player.team() ||
+                transportFamily(anchorTile.block()) != selection.family){
+                upgradeSelections.remove(i);
+            }else{
+                selection.sourceBlock = anchorTile.block();
+            }
+        }
+
+        if(upgradeSelections.isEmpty()){
+            clearUpgradeSelection();
+            showToast("The selected transport lines no longer exist.", 4f);
+            rebuildRoutePanel();
+            return;
+        }
+
+        upgradeSourceFamily = upgradeSelections.first().family;
+        for(UpgradeSelection selection : upgradeSelections){
+            selection.clearScan();
+        }
 
         if(routeBlock == null || transportFamily(routeBlock) != upgradeSourceFamily){
+            rebuildUpgradeAggregate();
             showToast("Choose a compatible replacement block from the build menu.", 4f);
             rebuildRoutePanel();
             return;
         }
 
-        scanUpgradeLine(anchorTile);
+        refreshQueuedPlanSnapshot();
+        for(UpgradeSelection selection : upgradeSelections){
+            scanUpgradeSelection(selection);
+        }
+        rebuildUpgradeAggregate();
         showUpgradeScanResult(announceTarget);
         rebuildRoutePanel();
     }
 
     private void showUpgradeScanResult(boolean announceTarget){
+        String prefix = announceTarget ? "Replacement changed to " + routeBlock.localizedName + ". " : "";
         if(upgradePlans.isEmpty()){
             showToast(
-                "No replaceable blocks were found. This connected line may already use " + routeBlock.localizedName + ", or the remaining tiles cannot be replaced.",
-                5f
+                prefix + "No replaceable blocks were found in the " + upgradeSelections.size + " selected line" +
+                    (upgradeSelections.size == 1 ? "." : "s.") +
+                    " They may already use " + routeBlock.localizedName + " or cannot currently be replaced.",
+                6f
             );
             return;
         }
 
-        String prefix = announceTarget ? "Replacement changed to " + routeBlock.localizedName + ". " : "";
+        String branches = upgradeAmbiguousConnectors == 0 ? "" :
+            " " + upgradeAmbiguousConnectors + " branching connector" +
+                (upgradeAmbiguousConnectors == 1 ? " was" : "s were") +
+                " left as a safe stopping point; tap the desired continuation to add it.";
+
         showToast(
-            prefix + "Found " + upgradePlans.size + " block" + (upgradePlans.size == 1 ? "" : "s") +
-                " to replace. " + upgradePreservedSpecials + " router, bridge, junction, or other special block" +
-                (upgradePreservedSpecials == 1 ? " was" : "s were") + " preserved and followed.",
-            6f
+            prefix + "Selected " + upgradeSelections.size + " line" + (upgradeSelections.size == 1 ? "" : "s") +
+                " with " + upgradePlans.size + " replacement" + (upgradePlans.size == 1 ? "" : "s") +
+                ". " + upgradePreservedSpecials + " special block" +
+                (upgradePreservedSpecials == 1 ? " was" : "s were") + " preserved and followed." + branches,
+            branches.isEmpty() ? 6f : 8f
         );
     }
 
-    private void scanUpgradeLine(Tile start){
-        if(routeBlock == null || upgradeSourceFamily == null) return;
-        refreshQueuedPlanSnapshot();
+    private void scanUpgradeSelection(UpgradeSelection selection){
+        if(routeBlock == null || selection == null || selection.family == null) return;
+        selection.clearScan();
 
-        Seq<Tile> open = new Seq<>();
-        IntSet visited = new IntSet();
-        open.add(start);
-        visited.add(tileKey(start.x, start.y));
+        Tile start = Vars.world.tile(selection.anchor.x, selection.anchor.y);
+        if(start == null || start.build == null || start.team() != Vars.player.team() ||
+            transportFamily(start.block()) != selection.family){
+            return;
+        }
+        selection.sourceBlock = start.block();
+
+        Seq<UpgradeScanState> open = new Seq<>();
+        HashSet<Long> visited = new HashSet<>();
+        enqueueUpgradeState(selection, start, -1, open, visited);
 
         int cursor = 0;
         int limit = Vars.mobile ? mobileUpgradeScanLimit : desktopUpgradeScanLimit;
-        int skipped = 0;
 
-        while(cursor < open.size && visited.size < limit){
-            Tile current = open.get(cursor++);
+        while(cursor < open.size && visited.size() < limit){
+            UpgradeScanState state = open.get(cursor++);
+            Tile current = state.tile;
 
-            if(isUpgradeableTransportTile(current)){
-                int key = tileKey(current.x, current.y);
-                upgradeKeys.add(key);
-
-                BuildPlan queued = queuedPlansByKey.get(key);
-                boolean alreadyQueued = queued != null && queued.block == routeBlock;
-                if(current.block() != routeBlock && !alreadyQueued){
-                    int rotation = current.build == null ? 0 : current.build.rotation;
-                    BuildPlan plan = new BuildPlan(current.x, current.y, rotation, routeBlock);
-                    if(routeBlock.canReplace(current.block()) &&
-                        Build.validPlace(routeBlock, Vars.player.team(), current.x, current.y, rotation)){
-                        upgradePlans.add(plan);
-                    }else{
-                        skipped++;
-                    }
-                }
+            if(isUpgradeableTransportTile(selection, current)){
+                markUpgradeTransport(selection, current);
+                addUpgradeReplacementPlan(selection, current);
 
                 for(int direction = 0; direction < 4; direction++){
                     Tile adjacent = Vars.world.tile(
@@ -1376,76 +1429,144 @@ public class AutoRouteMod extends Mod{
                     );
                     if(adjacent == null || adjacent.build == null || adjacent.team() != Vars.player.team()) continue;
 
-                    if(isUpgradeableTransportTile(adjacent)){
+                    if(isUpgradeableTransportTile(selection, adjacent)){
                         if(upgradeBlocksDirectlyConnected(current, adjacent)){
-                            enqueueUpgradeTile(adjacent, open, visited);
+                            enqueueUpgradeState(selection, adjacent, oppositeDirection(direction), open, visited);
                         }
-                        continue;
-                    }
-
-                    if(isCompatibleUpgradeJunction(adjacent)){
-                        addAcrossUpgradeJunction(current, adjacent, direction, open, visited);
-                        continue;
-                    }
-
-                    if(isCompatibleUpgradeBridge(adjacent)){
-                        addAcrossUpgradeBridge(current, adjacent, open, visited);
-                        continue;
-                    }
-
-                    if(isCompatibleUpgradeConnector(adjacent)){
-                        addAcrossUpgradeConnector(current, adjacent, open, visited);
+                    }else if(isCompatibleUpgradeJunction(selection, adjacent)){
+                        enqueueUpgradeState(selection, adjacent, oppositeDirection(direction), open, visited);
+                    }else if(isCompatibleUpgradeBridge(selection, adjacent)){
+                        addAcrossUpgradeBridge(selection, current, adjacent, open, visited);
+                    }else if(isCompatibleUpgradeConnector(selection, adjacent)){
+                        enqueueUpgradeState(selection, adjacent, oppositeDirection(direction), open, visited);
                     }
                 }
-            }else if(isCompatibleUpgradeConnector(current)){
-                // A router/sorter/gate can join several branches. Preserve the
-                // special block and follow every directly attached compatible
-                // transport branch so the preview shows the complete connected
-                // network instead of stopping at the router.
-                markUpgradeSpecial(current);
-                for(int direction = 0; direction < 4; direction++){
-                    Tile adjacent = Vars.world.tile(current.x + dirX[direction], current.y + dirY[direction]);
-                    if(isUpgradeableTransportTile(adjacent)){
-                        enqueueUpgradeTile(adjacent, open, visited);
-                    }else if(isCompatibleUpgradeBridge(adjacent)){
-                        addAcrossUpgradeBridge(current, adjacent, open, visited);
-                    }else if(isCompatibleUpgradeConnector(adjacent)){
-                        enqueueUpgradeConnector(adjacent, open, visited);
-                    }
-                }
+            }else if(isCompatibleUpgradeJunction(selection, current)){
+                markUpgradeSpecial(selection, current);
+                if(state.incomingDirection < 0) continue;
+
+                int exitDirection = oppositeDirection(state.incomingDirection);
+                Tile opposite = Vars.world.tile(
+                    current.x + dirX[exitDirection],
+                    current.y + dirY[exitDirection]
+                );
+                continueUpgradeScan(selection, current, opposite, open, visited);
+            }else if(isCompatibleUpgradeConnector(selection, current)){
+                scanAcrossUpgradeConnector(selection, current, state.incomingDirection, open, visited);
             }
         }
 
-        upgradePreservedSpecials = upgradeSpecialTiles.size;
-
-        if(visited.size >= limit && cursor < open.size){
-            showToast(
-                "The connected network reached the " + limit + "-tile safety limit. Only the highlighted part was selected.",
-                5f
-            );
-        }else if(skipped > 0){
-            showToast(
-                skipped + " transport block" + (skipped == 1 ? " could" : "s could") +
-                    " not be replaced and were left unchanged.",
-                4f
-            );
+        if(visited.size() >= limit && cursor < open.size){
+            selection.limitHit = true;
         }
     }
 
-    private void enqueueUpgradeTile(Tile tile, Seq<Tile> open, IntSet visited){
-        if(tile == null || !isUpgradeableTransportTile(tile)) return;
+    private void addUpgradeReplacementPlan(UpgradeSelection selection, Tile tile){
         int key = tileKey(tile.x, tile.y);
-        if(visited.contains(key)) return;
-        visited.add(key);
-        open.add(tile);
+        BuildPlan queued = queuedPlansByKey.get(key);
+        boolean alreadyQueued = queued != null && queued.block == routeBlock;
+        if(tile.block() == routeBlock || alreadyQueued) return;
+
+        int rotation = tile.build == null ? 0 : tile.build.rotation;
+        BuildPlan plan = new BuildPlan(tile.x, tile.y, rotation, routeBlock);
+        if(routeBlock.canReplace(tile.block()) &&
+            Build.validPlace(routeBlock, Vars.player.team(), tile.x, tile.y, rotation)){
+            if(!selection.planKeys.contains(key)){
+                selection.planKeys.add(key);
+                selection.plans.add(plan);
+            }
+        }else{
+            selection.skipped++;
+        }
     }
 
-    private void enqueueUpgradeConnector(Tile tile, Seq<Tile> open, IntSet visited){
-        if(tile == null || !isCompatibleUpgradeConnector(tile)) return;
+    private void enqueueUpgradeState(UpgradeSelection selection, Tile tile, int incomingDirection,
+                                     Seq<UpgradeScanState> open, HashSet<Long> visited){
+        if(tile == null || tile.build == null || tile.team() != Vars.player.team()) return;
+        if(!isUpgradeableTransportTile(selection, tile) &&
+            !isCompatibleUpgradeJunction(selection, tile) &&
+            !isCompatibleUpgradeConnector(selection, tile)){
+            return;
+        }
+
+        long visitKey = upgradeVisitKey(selection, tile, incomingDirection);
+        if(!visited.add(visitKey)) return;
+        open.add(new UpgradeScanState(tile, incomingDirection));
+    }
+
+    private long upgradeVisitKey(UpgradeSelection selection, Tile tile, int incomingDirection){
+        int stateCode = 0;
+        if(isCompatibleUpgradeJunction(selection, tile)){
+            // A Junction contains independent horizontal and vertical lanes.
+            // Track those axes separately so crossing lines cannot block one
+            // another, while opposite entries on the same lane stay deduplicated.
+            stateCode = incomingDirection < 0 ? 3 : 1 + (incomingDirection & 1);
+        }else if(isCompatibleUpgradeConnector(selection, tile)){
+            // Connector branch choices depend on which side was entered.
+            stateCode = incomingDirection < 0 ? 5 : 1 + incomingDirection;
+        }
+        return (((long)tileKey(tile.x, tile.y)) & 0xffffffffL) << 3 | (stateCode & 7L);
+    }
+
+    private void continueUpgradeScan(UpgradeSelection selection, Tile current, Tile next,
+                                     Seq<UpgradeScanState> open, HashSet<Long> visited){
+        if(next == null || next.build == null || next.team() != Vars.player.team()) return;
+        int travelDirection = directionBetween(current, next);
+        if(travelDirection < 0) return;
+        int incomingDirection = oppositeDirection(travelDirection);
+
+        if(isUpgradeableTransportTile(selection, next) ||
+            isCompatibleUpgradeJunction(selection, next) ||
+            isCompatibleUpgradeConnector(selection, next)){
+            enqueueUpgradeState(selection, next, incomingDirection, open, visited);
+        }else if(isCompatibleUpgradeBridge(selection, next)){
+            addAcrossUpgradeBridge(selection, current, next, open, visited);
+        }
+    }
+
+    private void scanAcrossUpgradeConnector(UpgradeSelection selection, Tile connector, int incomingDirection,
+                                            Seq<UpgradeScanState> open, HashSet<Long> visited){
+        markUpgradeSpecial(selection, connector);
+
+        Seq<Tile> candidates = new Seq<>();
+        IntSet candidateKeys = new IntSet();
+        for(int direction = 0; direction < 4; direction++){
+            if(direction == incomingDirection) continue;
+            Tile adjacent = Vars.world.tile(connector.x + dirX[direction], connector.y + dirY[direction]);
+            if(adjacent == null || adjacent.build == null || adjacent.team() != Vars.player.team()) continue;
+            if(!isUpgradeableTransportTile(selection, adjacent) &&
+                !isCompatibleUpgradeJunction(selection, adjacent) &&
+                !isCompatibleUpgradeBridge(selection, adjacent) &&
+                !isCompatibleUpgradeConnector(selection, adjacent)){
+                continue;
+            }
+
+            int key = tileKey(adjacent.x, adjacent.y);
+            if(candidateKeys.contains(key)) continue;
+            candidateKeys.add(key);
+            candidates.add(adjacent);
+        }
+
+        if(candidates.size == 1){
+            continueUpgradeScan(selection, connector, candidates.first(), open, visited);
+        }else if(candidates.size > 1){
+            // Routers and similar connectors can merge unrelated item lines.
+            // Stop here rather than silently selecting every branch. The player
+            // can tap the desired continuation as another additive selection.
+            markUpgradeAmbiguous(selection, connector);
+        }
+    }
+
+    private void markUpgradeTransport(UpgradeSelection selection, Tile tile){
         int key = tileKey(tile.x, tile.y);
-        if(visited.contains(key)) return;
-        visited.add(key);
-        open.add(tile);
+        if(selection.transportKeys.contains(key)) return;
+        selection.transportKeys.add(key);
+        selection.transportTiles.add(new Point2(tile.x, tile.y));
+    }
+
+    private boolean isUpgradeableTransportTile(UpgradeSelection selection, Tile tile){
+        return tile != null && tile.build != null && tile.team() == Vars.player.team() &&
+            selection != null && selection.family != null && transportFamily(tile.block()) == selection.family;
     }
 
     private boolean isUpgradeableTransportTile(Tile tile){
@@ -1464,67 +1585,43 @@ public class AutoRouteMod extends Mod{
             source.y + dirY[rotation] == destination.y;
     }
 
-    private boolean isCompatibleUpgradeJunction(Tile tile){
-        if(tile == null || tile.build == null || tile.team() != Vars.player.team() || upgradeSourceFamily == null){
+    private boolean isCompatibleUpgradeJunction(UpgradeSelection selection, Tile tile){
+        if(tile == null || tile.build == null || tile.team() != Vars.player.team() || selection == null || selection.family == null){
             return false;
         }
 
         Block block = tile.block();
-        Block sourceReplacement = junctionReplacementFor(upgradeSourceBlock);
+        Block sourceReplacement = junctionReplacementFor(selection.sourceBlock);
         Block targetReplacement = junctionReplacementFor(routeBlock);
         if(block == sourceReplacement || block == targetReplacement) return true;
 
-        // Recognize the actual junction classes as well. This matters when the
-        // source/target conveyor exposes no explicit replacement reference or
-        // when a compatible modded tier shares Mindustry's standard junction.
-        if(upgradeSourceFamily == TransportFamily.conduit){
+        if(selection.family == TransportFamily.conduit){
             return block instanceof LiquidJunction;
         }
         return block instanceof Junction;
     }
 
-    private void addAcrossUpgradeJunction(Tile current, Tile junction, int direction,
-                                          Seq<Tile> open, IntSet visited){
-        // A junction has two independent straight lanes. Entering from one side
-        // always continues to the opposite side; conveyor rotation must not be
-        // used as a rejection condition, because valid lines may feed the lane
-        // from either direction or contain mixed/upgraded tiers.
-        Tile opposite = Vars.world.tile(
-            junction.x + dirX[direction],
-            junction.y + dirY[direction]
-        );
-        if(opposite == null || opposite.build == null || opposite.team() != Vars.player.team()) return;
-
-        markUpgradeSpecial(junction);
-
-        if(isUpgradeableTransportTile(opposite)){
-            enqueueUpgradeTile(opposite, open, visited);
-        }else if(isCompatibleUpgradeBridge(opposite)){
-            addAcrossUpgradeBridge(junction, opposite, open, visited);
-        }else if(isCompatibleUpgradeConnector(opposite)){
-            enqueueUpgradeConnector(opposite, open, visited);
+    private boolean isCompatibleUpgradeBridge(UpgradeSelection selection, Tile tile){
+        if(tile == null || tile.build == null || tile.team() != Vars.player.team() || selection == null || selection.family == null){
+            return false;
         }
-    }
-
-    private boolean isCompatibleUpgradeBridge(Tile tile){
-        if(tile == null || tile.build == null || tile.team() != Vars.player.team() || upgradeSourceFamily == null) return false;
         Block block = tile.block();
         if(!(block instanceof ItemBridge) && !(block instanceof DirectionBridge)) return false;
-        return upgradeSourceFamily == TransportFamily.conduit ? block.hasLiquids : block.hasItems;
+        return selection.family == TransportFamily.conduit ? block.hasLiquids : block.hasItems;
     }
 
-    private void addAcrossUpgradeBridge(Tile current, Tile endpoint,
-                                        Seq<Tile> open, IntSet visited){
+    private void addAcrossUpgradeBridge(UpgradeSelection selection, Tile current, Tile endpoint,
+                                        Seq<UpgradeScanState> open, HashSet<Long> visited){
         if(endpoint.build instanceof ItemBridge.ItemBridgeBuild bridge){
             Tile linked = Vars.world.tile(bridge.link);
-            if(isCompatibleUpgradeBridge(linked)){
-                addUpgradeBridgePair(current, endpoint, linked, open, visited);
+            if(isCompatibleUpgradeBridge(selection, linked)){
+                addUpgradeBridgePair(selection, current, endpoint, linked, open, visited);
             }
 
             for(int i = 0; i < bridge.incoming.size; i++){
                 Tile incoming = Vars.world.tile(bridge.incoming.items[i]);
-                if(isCompatibleUpgradeBridge(incoming)){
-                    addUpgradeBridgePair(current, incoming, endpoint, open, visited);
+                if(isCompatibleUpgradeBridge(selection, incoming)){
+                    addUpgradeBridgePair(selection, current, incoming, endpoint, open, visited);
                 }
             }
             return;
@@ -1533,91 +1630,131 @@ public class AutoRouteMod extends Mod{
         if(endpoint.build instanceof DirectionBridge.DirectionBridgeBuild bridge){
             DirectionBridge.DirectionBridgeBuild linked = bridge.findLink();
             if(linked != null && linked.tile != null){
-                addUpgradeBridgePair(current, endpoint, linked.tile, open, visited);
+                addUpgradeBridgePair(selection, current, endpoint, linked.tile, open, visited);
             }
 
             for(DirectionBridge.DirectionBridgeBuild incoming : bridge.occupied){
                 if(incoming != null && incoming.tile != null){
-                    addUpgradeBridgePair(current, incoming.tile, endpoint, open, visited);
+                    addUpgradeBridgePair(selection, current, incoming.tile, endpoint, open, visited);
                 }
             }
         }
     }
 
-    private void addUpgradeBridgePair(Tile current, Tile source, Tile destination,
-                                      Seq<Tile> open, IntSet visited){
+    private void addUpgradeBridgePair(UpgradeSelection selection, Tile current, Tile source, Tile destination,
+                                      Seq<UpgradeScanState> open, HashSet<Long> visited){
         if(source == null || destination == null || source == destination) return;
         if(source.x != destination.x && source.y != destination.y) return;
 
-        int direction = direction(
-            new Point2(source.x, source.y),
-            new Point2(destination.x, destination.y)
-        );
+        int bridgeDirection = directionBetween(source, destination);
+        if(bridgeDirection < 0) return;
 
         Tile input = Vars.world.tile(
-            source.x - dirX[direction],
-            source.y - dirY[direction]
+            source.x - dirX[bridgeDirection],
+            source.y - dirY[bridgeDirection]
         );
         Tile output = Vars.world.tile(
-            destination.x + dirX[direction],
-            destination.y + dirY[direction]
+            destination.x + dirX[bridgeDirection],
+            destination.y + dirY[bridgeDirection]
         );
 
-        boolean currentIsInput = current != null && input != null && current.x == input.x && current.y == input.y;
-        boolean currentIsOutput = current != null && output != null && current.x == output.x && current.y == output.y;
+        boolean currentIsInput = sameTile(current, input);
+        boolean currentIsOutput = sameTile(current, output);
         if(!currentIsInput && !currentIsOutput) return;
 
-        markUpgradeSpecial(source);
-        markUpgradeSpecial(destination);
+        markUpgradeSpecial(selection, source);
+        markUpgradeSpecial(selection, destination);
 
         Tile continuation = currentIsInput ? output : input;
-        if(isUpgradeableTransportTile(continuation)){
-            enqueueUpgradeTile(continuation, open, visited);
-        }else if(isCompatibleUpgradeConnector(continuation)){
-            enqueueUpgradeConnector(continuation, open, visited);
-        }
+        Tile continuationOrigin = currentIsInput ? destination : source;
+        continueUpgradeScan(selection, continuationOrigin, continuation, open, visited);
     }
 
-    private boolean isCompatibleUpgradeConnector(Tile tile){
-        if(tile == null || tile.build == null || tile.team() != Vars.player.team() || upgradeSourceFamily == null) return false;
+    private boolean isCompatibleUpgradeConnector(UpgradeSelection selection, Tile tile){
+        if(tile == null || tile.build == null || tile.team() != Vars.player.team() || selection == null || selection.family == null){
+            return false;
+        }
         Block block = tile.block();
         if(block.size != 1 || block instanceof Conveyor || block instanceof Duct || block instanceof Conduit ||
-            block instanceof ItemBridge || block instanceof DirectionBridge || isCompatibleUpgradeJunction(tile)){
+            block instanceof ItemBridge || block instanceof DirectionBridge || isCompatibleUpgradeJunction(selection, tile)){
             return false;
         }
 
-        if(upgradeSourceFamily == TransportFamily.conduit){
+        if(selection.family == TransportFamily.conduit){
             return block.hasLiquids && block.outputsLiquid;
         }
 
-        // Router, sorter, overflow/underflow gate, duct router, and compatible
-        // modded one-tile transportation nodes all use this group. Some instant
-        // transfer blocks (notably Sorter) do not set hasItems, so output and
-        // instant-transfer behavior must also be accepted.
         return block.group == BlockGroup.transportation &&
             (block.hasItems || block.outputsItems() || block.instantTransfer);
     }
 
-    private void addAcrossUpgradeConnector(Tile current, Tile connector,
-                                           Seq<Tile> open, IntSet visited){
-        markUpgradeSpecial(connector);
-        enqueueUpgradeConnector(connector, open, visited);
-
-        for(int direction = 0; direction < 4; direction++){
-            Tile adjacent = Vars.world.tile(connector.x + dirX[direction], connector.y + dirY[direction]);
-            if(adjacent == null || adjacent == current) continue;
-            if(isUpgradeableTransportTile(adjacent)){
-                enqueueUpgradeTile(adjacent, open, visited);
-            }
-        }
-    }
-
-    private void markUpgradeSpecial(Tile tile){
+    private void markUpgradeSpecial(UpgradeSelection selection, Tile tile){
         if(tile == null) return;
         int key = tileKey(tile.x, tile.y);
-        if(upgradeSpecialKeys.contains(key)) return;
-        upgradeSpecialKeys.add(key);
-        upgradeSpecialTiles.add(new Point2(tile.x, tile.y));
+        if(selection.specialKeys.contains(key)) return;
+        selection.specialKeys.add(key);
+        selection.specialTiles.add(new Point2(tile.x, tile.y));
+    }
+
+    private void markUpgradeAmbiguous(UpgradeSelection selection, Tile tile){
+        if(tile == null) return;
+        int key = tileKey(tile.x, tile.y);
+        if(selection.ambiguousKeys.contains(key)) return;
+        selection.ambiguousKeys.add(key);
+        selection.ambiguousTiles.add(new Point2(tile.x, tile.y));
+    }
+
+    private void rebuildUpgradeAggregate(){
+        clearUpgradePreview();
+        if(upgradeSelections.isEmpty()){
+            upgradeSourceFamily = null;
+            return;
+        }
+
+        upgradeSourceFamily = upgradeSelections.first().family;
+        IntSet aggregatePlanKeys = new IntSet();
+
+        for(UpgradeSelection selection : upgradeSelections){
+            for(Point2 point : selection.transportTiles){
+                int key = tileKey(point.x, point.y);
+                upgradeKeys.add(key);
+            }
+
+            for(BuildPlan plan : selection.plans){
+                int key = tileKey(plan.x, plan.y);
+                if(aggregatePlanKeys.contains(key)) continue;
+                aggregatePlanKeys.add(key);
+                upgradePlans.add(plan);
+            }
+
+            for(Point2 point : selection.specialTiles){
+                int key = tileKey(point.x, point.y);
+                if(upgradeSpecialKeys.contains(key)) continue;
+                upgradeSpecialKeys.add(key);
+                upgradeSpecialTiles.add(new Point2(point.x, point.y));
+            }
+
+            for(Point2 point : selection.ambiguousTiles){
+                int key = tileKey(point.x, point.y);
+                if(upgradeAmbiguousKeys.contains(key)) continue;
+                upgradeAmbiguousKeys.add(key);
+                upgradeAmbiguousTiles.add(new Point2(point.x, point.y));
+            }
+        }
+
+        upgradePreservedSpecials = upgradeSpecialTiles.size;
+        upgradeAmbiguousConnectors = upgradeAmbiguousTiles.size;
+
+        for(UpgradeSelection selection : upgradeSelections){
+            if(selection.limitHit){
+                showToast(
+                    "One selected line reached the " + (Vars.mobile ? mobileUpgradeScanLimit : desktopUpgradeScanLimit) +
+                        "-tile safety limit. Only its highlighted section was added.",
+                    5f
+                );
+                break;
+            }
+        }
     }
 
     private TransportFamily transportFamily(Block block){
@@ -1636,10 +1773,33 @@ public class AutoRouteMod extends Mod{
 
     private String upgradeFamilyName(){
         TransportFamily family = upgradeSourceFamily != null ? upgradeSourceFamily : transportFamily(routeBlock);
+        return upgradeFamilyName(family);
+    }
+
+    private String upgradeFamilyName(TransportFamily family){
         if(family == TransportFamily.conveyor) return "conveyor";
         if(family == TransportFamily.duct) return "duct";
         if(family == TransportFamily.conduit) return "conduit";
         return "transport";
+    }
+
+    private int oppositeDirection(int direction){
+        return direction < 0 ? -1 : (direction + 2) & 3;
+    }
+
+    private int directionBetween(Tile from, Tile to){
+        if(from == null || to == null) return -1;
+        int dx = to.x - from.x;
+        int dy = to.y - from.y;
+        if(dx > 0 && dy == 0) return 0;
+        if(dx == 0 && dy > 0) return 1;
+        if(dx < 0 && dy == 0) return 2;
+        if(dx == 0 && dy < 0) return 3;
+        return -1;
+    }
+
+    private boolean sameTile(Tile first, Tile second){
+        return first != null && second != null && first.x == second.x && first.y == second.y;
     }
 
     private boolean isUpgradePlanUsable(BuildPlan plan){
@@ -1651,8 +1811,8 @@ public class AutoRouteMod extends Mod{
     }
 
     private void commitUpgradeLine(){
-        if(upgradeAnchor == null){
-            showToast("Tap an existing transport line before pressing Build.", 3f);
+        if(upgradeSelections.isEmpty()){
+            showToast("Tap one or more existing transport lines before pressing Build.", 3f);
             return;
         }
         if(routeBlock == null || upgradeSourceFamily == null || transportFamily(routeBlock) != upgradeSourceFamily){
@@ -1660,7 +1820,7 @@ public class AutoRouteMod extends Mod{
             return;
         }
         if(upgradePlans.isEmpty()){
-            rebuildUpgradePreviewFromAnchor(false);
+            rebuildAllUpgradePreviews(false);
             return;
         }
         if(Vars.player == null || Vars.player.unit() == null){
@@ -1670,21 +1830,26 @@ public class AutoRouteMod extends Mod{
 
         for(BuildPlan plan : upgradePlans){
             if(!isUpgradePlanUsable(plan)){
-                rebuildUpgradePreviewFromAnchor(false);
-                showToast("The line changed. The upgrade preview was refreshed; review it and tap Build again.", 5f);
+                rebuildAllUpgradePreviews(false);
+                showToast("The selected lines changed. The preview was refreshed; review it and tap Build again.", 5f);
                 return;
             }
         }
 
         int queued = upgradePlans.size;
+        int lineCount = upgradeSelections.size;
         for(BuildPlan plan : upgradePlans){
             Vars.player.unit().addBuild(plan.copy());
         }
 
+        String branchNote = upgradeAmbiguousConnectors == 0 ? "" :
+            " " + upgradeAmbiguousConnectors + " ambiguous branch" +
+                (upgradeAmbiguousConnectors == 1 ? " was" : "es were") + " intentionally left untouched.";
         showToast(
-            "Queued " + queued + " replacement" + (queued == 1 ? "" : "s") +
-                " to " + routeBlock.localizedName + ". Routers, bridges, junctions, and other special transport blocks were preserved.",
-            6f
+            "Queued " + queued + " replacement" + (queued == 1 ? "" : "s") + " across " +
+                lineCount + " selected line" + (lineCount == 1 ? "" : "s") + " to " + routeBlock.localizedName +
+                ". Routers, bridges, junctions, and other special transport blocks were preserved." + branchNote,
+            branchNote.isEmpty() ? 6f : 8f
         );
         clearUpgradeSelection();
     }
@@ -1692,14 +1857,16 @@ public class AutoRouteMod extends Mod{
     private void clearUpgradePreview(){
         upgradePlans.clear();
         upgradeSpecialTiles.clear();
+        upgradeAmbiguousTiles.clear();
         upgradeKeys.clear();
         upgradeSpecialKeys.clear();
+        upgradeAmbiguousKeys.clear();
         upgradePreservedSpecials = 0;
+        upgradeAmbiguousConnectors = 0;
     }
 
     private void clearUpgradeSelection(){
-        upgradeAnchor = null;
-        upgradeSourceBlock = null;
+        upgradeSelections.clear();
         upgradeSourceFamily = null;
         clearUpgradePreview();
     }
@@ -2029,7 +2196,16 @@ public class AutoRouteMod extends Mod{
 
     private void undoWaypoint(){
         if(upgradeMode){
-            clearUpgradeSelection();
+            if(upgradeSelections.isEmpty()) return;
+            int removedNumber = upgradeSelections.size;
+            upgradeSelections.remove(upgradeSelections.size - 1);
+            rebuildUpgradeAggregate();
+            showToast(
+                "Removed the most recently added line (line " + removedNumber + "). " +
+                    upgradeSelections.size + " line" + (upgradeSelections.size == 1 ? " remains." : "s remain."),
+                4f
+            );
+            rebuildRoutePanel();
             return;
         }
         if(waypoints.isEmpty()) return;
@@ -2458,6 +2634,18 @@ public class AutoRouteMod extends Mod{
                 Tile specialTile = Vars.world.tile(special.x, special.y);
                 if(specialTile != null){
                     Drawf.square(specialTile.drawx(), specialTile.drawy(), Vars.tilesize / 2f + 1f, Pal.accent);
+                }
+            }
+            for(Point2 ambiguous : upgradeAmbiguousTiles){
+                Tile ambiguousTile = Vars.world.tile(ambiguous.x, ambiguous.y);
+                if(ambiguousTile != null){
+                    Drawf.square(ambiguousTile.drawx(), ambiguousTile.drawy(), Vars.tilesize / 2f + 3f, Pal.remove);
+                }
+            }
+            for(UpgradeSelection selection : upgradeSelections){
+                Tile anchorTile = Vars.world.tile(selection.anchor.x, selection.anchor.y);
+                if(anchorTile != null){
+                    Drawf.square(anchorTile.drawx(), anchorTile.drawy(), Vars.tilesize / 2f + 2f, Pal.accent);
                 }
             }
             for(BuildPlan plan : upgradePlans){
@@ -3645,6 +3833,59 @@ public class AutoRouteMod extends Mod{
 
         static RoutePreference fromOrdinal(int ordinal){
             return values()[Math.floorMod(ordinal, values().length)];
+        }
+    }
+
+    private final class UpgradeSelection{
+        final Point2 anchor;
+        final TransportFamily family;
+        final Seq<Point2> transportTiles = new Seq<>();
+        final IntSet transportKeys = new IntSet();
+        final Seq<BuildPlan> plans = new Seq<>();
+        final IntSet planKeys = new IntSet();
+        final Seq<Point2> specialTiles = new Seq<>();
+        final IntSet specialKeys = new IntSet();
+        final Seq<Point2> ambiguousTiles = new Seq<>();
+        final IntSet ambiguousKeys = new IntSet();
+        Block sourceBlock;
+        int skipped;
+        boolean limitHit;
+
+        UpgradeSelection(Tile anchorTile, TransportFamily family){
+            this.anchor = new Point2(anchorTile.x, anchorTile.y);
+            this.family = family;
+            this.sourceBlock = anchorTile.block();
+            transportKeys.add(tileKey(anchor.x, anchor.y));
+            transportTiles.add(new Point2(anchor.x, anchor.y));
+        }
+
+        boolean containsTransportKey(int key){
+            return key == tileKey(anchor.x, anchor.y) || transportKeys.contains(key);
+        }
+
+        void clearScan(){
+            transportTiles.clear();
+            transportKeys.clear();
+            plans.clear();
+            planKeys.clear();
+            specialTiles.clear();
+            specialKeys.clear();
+            ambiguousTiles.clear();
+            ambiguousKeys.clear();
+            skipped = 0;
+            limitHit = false;
+            transportKeys.add(tileKey(anchor.x, anchor.y));
+            transportTiles.add(new Point2(anchor.x, anchor.y));
+        }
+    }
+
+    private static final class UpgradeScanState{
+        final Tile tile;
+        final int incomingDirection;
+
+        UpgradeScanState(Tile tile, int incomingDirection){
+            this.tile = tile;
+            this.incomingDirection = incomingDirection;
         }
     }
 
