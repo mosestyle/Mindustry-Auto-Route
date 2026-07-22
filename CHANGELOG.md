@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.9
+
+- Added an automatic long-route fallback that activates only after the normal fast A-to-B search reaches its time or expansion safety limit.
+- Splits difficult long segments internally through safe hidden guide points, then merges the results into one continuous preview without adding visible waypoints.
+- Kept the existing **Short**, **Straight**, and **Clean** route preferences for both direct and automatically segmented paths; no Cheapest/resource-cost route mode was added.
+- Added strict mobile/desktop fallback budgets and attempt limits so ordinary successful routes retain the v0.9.8 single-search performance.
+- Removed the old fixed waypoint-distance rejection, allowing long Point A-to-Point B requests to attempt automatic segmentation before asking for a manual waypoint.
+- Added one compact **↻ Try another route** control in the existing Undo/Clear/Build row without increasing panel height.
+- Alternative routes are calculated strictly on demand, one at a time, under the currently selected Short/Straight/Clean preference.
+- Caches up to three genuinely different previews; after they are found—or once no further different route exists—the same button cycles through the cached routes instantly and status shows `R1/2`, `R2/3`, and similar markers.
+- Preserved the v0.9.7/v0.9.8 extra-compact music player layout unchanged.
+
 ## 0.9.8
 
 - Restored the fast v0.9.6 single-route calculation path for normal Auto Route building. Point B now calculates only the currently selected Short, Straight, or Clean preference instead of running all three pathfinders.

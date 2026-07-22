@@ -72,6 +72,15 @@ public class AutoRouteMod extends Mod{
     private static final int desktopMaxSearchCells = 450_000;
     private static final int mobileMaxSearchCells = 180_000;
     private static final int pathCacheLimit = 32;
+    private static final int maxOnDemandAlternatives = 3;
+    private static final int mobileAutomaticSegmentLength = 72;
+    private static final int desktopAutomaticSegmentLength = 128;
+    private static final int mobileAutomaticGuideRadius = 28;
+    private static final int desktopAutomaticGuideRadius = 40;
+    private static final int mobileAutomaticSegmentAttempts = 18;
+    private static final int desktopAutomaticSegmentAttempts = 32;
+    private static final long mobileAutomaticSegmentBudgetNanos = 900_000_000L;
+    private static final long desktopAutomaticSegmentBudgetNanos = 2_200_000_000L;
     private static final long mobileForbiddenHoldNanos = 350_000_000L;
     private static final float mobileForbiddenPanThreshold = 12f;
     private static final int mobileUpgradeScanLimit = 900;
@@ -90,7 +99,9 @@ public class AutoRouteMod extends Mod{
     private final Seq<Point2> routeTiles = new Seq<>();
     private final Seq<BridgeLink> routeBridges = new Seq<>();
     private final Seq<BuildPlan> routePlans = new Seq<>();
+    private final Seq<RouteAlternative> routeAlternatives = new Seq<>();
     private final IntSet routeKeys = new IntSet();
+    private final IntSet alternativePenaltyKeys = new IntSet();
     private final IntSet routeJunctionKeys = new IntSet();
     private final IntSet waypointKeys = new IntSet();
     private final IntSet connectionWaypointKeys = new IntSet();
@@ -138,6 +149,8 @@ public class AutoRouteMod extends Mod{
     private int forbiddenPointerLastScreenY;
     private int selectedWaypointIndex = -1;
     private boolean searchRetryPass;
+    private boolean findingAlternative;
+    private boolean noMoreRouteAlternatives;
     private InputProcessor forbiddenInput;
     private InputProcessor routePlacementGuard;
     private boolean routePlacementSuppressed;
@@ -154,6 +167,9 @@ public class AutoRouteMod extends Mod{
     private int forbiddenRevision;
     private int queuedPlanFingerprint;
     private int previewPlanFingerprint;
+    private int selectedRouteAlternative = -1;
+    private int alternativePenaltyRevision;
+    private int alternativeSearchPass;
 
     private ImageButton routeButton;
     private TextButton oreButton;
@@ -618,12 +634,19 @@ public class AutoRouteMod extends Mod{
             routePanel.row();
 
             Table actions = new Table();
-            float actionWidth = (panelWidth - 10f) / 3f;
+            float actionWidth = (panelWidth - 12f) / 4f;
             actions.defaults().pad(2f).height(40f);
             actions.button("Undo", Styles.cleart, this::undoWaypoint)
                 .width(actionWidth);
             actions.button("Clear", Styles.cleart, this::clearRoute)
                 .width(actionWidth);
+            TextureRegionDrawable rerouteIcon = new TextureRegionDrawable(
+                Core.atlas.find("mindustry-auto-route-reroute")
+            );
+            ImageButton rerouteButton = actions.button(rerouteIcon, Styles.cleari, this::tryAnotherRoute)
+                .width(actionWidth)
+                .get();
+            rerouteButton.resizeImage(18f);
             actions.button("Build", Styles.defaultt, this::commitRoute)
                 .width(actionWidth);
             routePanel.add(actions).width(panelWidth).growX();
@@ -1088,6 +1111,9 @@ public class AutoRouteMod extends Mod{
         if(smartBridges > 0) details.append(" • ").append(smartBridges).append("B");
         if(oreFallbackSegments > 0) details.append(" • Ore");
         if(connectionEndpoints > 0) details.append(" • ").append(connectionEndpoints).append("L");
+        if(routeAlternatives.size > 1 && selectedRouteAlternative >= 0){
+            details.append(" • R").append(selectedRouteAlternative + 1).append('/').append(routeAlternatives.size);
+        }
 
         return "[accent]" + routeBlock.localizedName + "[]\n" +
             waypoints.size + " pts • " + routePlans.size + " tiles" + details;
@@ -1925,14 +1951,6 @@ public class AutoRouteMod extends Mod{
         }
 
         Point2 moved = new Point2(tile.x, tile.y);
-        if(index > 0 && manhattan(waypoints.get(index - 1).x, waypoints.get(index - 1).y, moved.x, moved.y) > maxWaypointDistance()){
-            showToast("That would make the previous segment too long. Choose a closer tile.", 4f);
-            return;
-        }
-        if(index < waypoints.size - 1 && manhattan(moved.x, moved.y, waypoints.get(index + 1).x, waypoints.get(index + 1).y) > maxWaypointDistance()){
-            showToast("That would make the next segment too long. Choose a closer tile.", 4f);
-            return;
-        }
 
         Point2 oldPoint = waypoints.get(index);
         Seq<PathResult> oldSegments = copySegments();
@@ -1944,6 +1962,7 @@ public class AutoRouteMod extends Mod{
             segments.clear();
             segments.addAll(oldSegments);
             rebuildRouteAndPlans();
+            resetRouteAlternativesToCurrent();
             showToast("That waypoint position has no safe route, so the old position was restored.", 5f);
             return;
         }
@@ -1956,6 +1975,169 @@ public class AutoRouteMod extends Mod{
         Seq<PathResult> copy = new Seq<>();
         for(PathResult segment : segments) copy.add(segment.copy());
         return copy;
+    }
+
+    private void resetRouteAlternativesToCurrent(){
+        routeAlternatives.clear();
+        selectedRouteAlternative = -1;
+        noMoreRouteAlternatives = false;
+
+        if(waypoints.size < 2 || segments.size != waypoints.size - 1) return;
+
+        routeAlternatives.add(new RouteAlternative(
+            preference,
+            copySegments(),
+            routeSignature(segments)
+        ));
+        selectedRouteAlternative = 0;
+    }
+
+    private String routeSignature(Seq<PathResult> sourceSegments){
+        StringBuilder signature = new StringBuilder();
+        for(PathResult segment : sourceSegments){
+            signature.append('|');
+            for(Point2 point : segment.points){
+                signature.append(point.x).append(',').append(point.y).append(';');
+            }
+            signature.append('B');
+            for(BridgeLink bridge : segment.bridges){
+                signature.append(bridge.start.x).append(',').append(bridge.start.y)
+                    .append('>').append(bridge.end.x).append(',').append(bridge.end.y).append(';');
+            }
+        }
+        return signature.toString();
+    }
+
+    private void tryAnotherRoute(){
+        if(upgradeMode){
+            showToast("Try another route is only available for normal Auto Route paths.", 3f);
+            return;
+        }
+        if(waypoints.size < 2 || segments.isEmpty()){
+            showToast("Add Point A and Point B first.", 3f);
+            return;
+        }
+
+        if(routeAlternatives.isEmpty()) resetRouteAlternativesToCurrent();
+        if(routeAlternatives.isEmpty()) return;
+
+        // Once three previews have been found, the same compact button simply
+        // cycles through the cached results with no additional pathfinding.
+        if(noMoreRouteAlternatives || routeAlternatives.size >= maxOnDemandAlternatives){
+            applyRouteAlternative((selectedRouteAlternative + 1) % routeAlternatives.size, true);
+            return;
+        }
+
+        if(selectedRouteAlternative >= 0 && selectedRouteAlternative < routeAlternatives.size - 1){
+            applyRouteAlternative(selectedRouteAlternative + 1, true);
+            return;
+        }
+
+        refreshQueuedPlanSnapshot();
+        Seq<PathResult> originalSegments = copySegments();
+        HashSet<String> knownSignatures = new HashSet<>();
+        for(RouteAlternative alternative : routeAlternatives){
+            knownSignatures.add(alternative.signature);
+        }
+
+        RouteAlternative candidate = null;
+        for(int pass = 1; pass <= 2 && candidate == null; pass++){
+            buildAlternativePenaltyKeys();
+            findingAlternative = true;
+            alternativeSearchPass = routeAlternatives.size + pass - 1;
+            alternativePenaltyRevision++;
+            pathCache.clear();
+
+            RouteAlternative attempted = calculateOnDemandAlternative();
+            if(attempted != null && !knownSignatures.contains(attempted.signature)){
+                candidate = attempted;
+            }
+
+            findingAlternative = false;
+            alternativeSearchPass = 0;
+            alternativePenaltyKeys.clear();
+            pathCache.clear();
+        }
+
+        // calculateOnDemandAlternative builds temporary routeKeys so later
+        // candidate segments can cross earlier ones safely. Restore the currently
+        // visible route before either applying the new result or reporting failure.
+        segments.clear();
+        segments.addAll(originalSegments);
+        rebuildRouteAndPlans();
+
+        if(candidate == null){
+            searchTimedOut = false;
+            searchLimitHit = false;
+            noMoreRouteAlternatives = true;
+            if(routeAlternatives.size > 1){
+                applyRouteAlternative(0, false);
+                showToast(
+                    "No additional different route was found. The " + routeAlternatives.size +
+                        " cached routes will now cycle instantly.",
+                    4f
+                );
+            }else{
+                showToast("No genuinely different safe route was found. The current route was kept.", 4f);
+            }
+            return;
+        }
+
+        routeAlternatives.add(candidate);
+        applyRouteAlternative(routeAlternatives.size - 1, true);
+    }
+
+    private void buildAlternativePenaltyKeys(){
+        alternativePenaltyKeys.clear();
+        for(RouteAlternative alternative : routeAlternatives){
+            for(PathResult segment : alternative.segments){
+                for(Point2 point : segment.points){
+                    int key = tileKey(point.x, point.y);
+                    if(!waypointKeys.contains(key)) alternativePenaltyKeys.add(key);
+                }
+            }
+        }
+    }
+
+    private RouteAlternative calculateOnDemandAlternative(){
+        Seq<PathResult> candidateSegments = new Seq<>();
+        routeTiles.clear();
+        routeKeys.clear();
+        if(!waypoints.isEmpty()) addRouteTile(waypoints.first());
+
+        for(int i = 1; i < waypoints.size; i++){
+            Point2 start = waypoints.get(i - 1);
+            Point2 goal = waypoints.get(i);
+            PathResult path = findPath(start, goal);
+            if(path == null || !validateIntentionalConnections(path, start, goal, false)){
+                return null;
+            }
+
+            candidateSegments.add(path.copy());
+            for(int j = 1; j < path.points.size; j++) addRouteTile(path.points.get(j));
+        }
+
+        return new RouteAlternative(preference, candidateSegments, routeSignature(candidateSegments));
+    }
+
+    private void applyRouteAlternative(int index, boolean announce){
+        if(index < 0 || index >= routeAlternatives.size) return;
+
+        RouteAlternative alternative = routeAlternatives.get(index);
+        selectedRouteAlternative = index;
+        segments.clear();
+        for(PathResult segment : alternative.segments){
+            segments.add(segment.copy());
+        }
+        rebuildRouteAndPlans();
+
+        if(announce){
+            showToast(
+                "Route " + (index + 1) + "/" + routeAlternatives.size +
+                    " • " + preference.shortLabel + " • " + routePlans.size + " tiles.",
+                3f
+            );
+        }
     }
 
     private void toggleBridges(){
@@ -2155,19 +2337,11 @@ public class AutoRouteMod extends Mod{
         if(waypoints.isEmpty()){
             waypoints.add(point);
             rebuildRouteAndPlans();
+            resetRouteAlternativesToCurrent();
             return;
         }
 
         Point2 start = waypoints.peek();
-        int distance = manhattan(start.x, start.y, point.x, point.y);
-        if(distance > maxWaypointDistance()){
-            showToast(
-                "That segment is very long (" + distance + " tiles). Add an intermediate waypoint to protect mobile performance.",
-                5f
-            );
-            return;
-        }
-
         PathResult path = findPath(start, point);
         if(path == null){
             showPathFailureToast();
@@ -2179,13 +2353,21 @@ public class AutoRouteMod extends Mod{
         segments.add(path);
         waypoints.add(point);
         rebuildRouteAndPlans();
+        resetRouteAlternativesToCurrent();
+        if(path.automaticSections > 1){
+            showToast(
+                "Long route found automatically in " + path.automaticSections +
+                    " hidden sections. No extra waypoint was needed.",
+                4f
+            );
+        }
     }
 
     private void showPathFailureToast(){
         if(searchTimedOut){
-            showToast("Route calculation took too long. Add a closer waypoint or use a less restrictive option.", 5f);
+            showToast("The direct and automatic long-route searches took too long. Add one waypoint near the difficult area.", 5f);
         }else if(searchLimitHit){
-            showToast("Route search reached its safety limit. Add an intermediate waypoint.", 5f);
+            showToast("The direct and automatic long-route searches reached their safety limit. Add one waypoint near the difficult area.", 5f);
         }else{
             showToast(
                 "No safe route was found. Try another waypoint, enable bridges, or change the ore/preference options.",
@@ -2218,6 +2400,7 @@ public class AutoRouteMod extends Mod{
         waypoints.remove(waypoints.size - 1);
         segments.remove(segments.size - 1);
         rebuildRouteAndPlans();
+        resetRouteAlternativesToCurrent();
     }
 
     private void clearRoute(){
@@ -2226,6 +2409,12 @@ public class AutoRouteMod extends Mod{
         routeTiles.clear();
         routeBridges.clear();
         routePlans.clear();
+        routeAlternatives.clear();
+        selectedRouteAlternative = -1;
+        noMoreRouteAlternatives = false;
+        alternativePenaltyKeys.clear();
+        findingAlternative = false;
+        alternativeSearchPass = 0;
         routeKeys.clear();
         routeJunctionKeys.clear();
         waypointKeys.clear();
@@ -2269,6 +2458,7 @@ public class AutoRouteMod extends Mod{
         segments.clear();
         segments.addAll(replacement);
         rebuildRouteAndPlans();
+        resetRouteAlternativesToCurrent();
         return true;
     }
 
@@ -2698,20 +2888,216 @@ public class AutoRouteMod extends Mod{
     private PathResult findPath(Point2 start, Point2 goal){
         searchRetryPass = false;
         PathResult result = findPathAttempt(start, goal);
+        if(result != null) return result;
 
-        // A short automatic retry smooths over first-run JVM warm-up and rare
-        // mobile timing spikes. It only runs after a safety timeout/expansion
-        // limit, never after a genuinely impossible route.
-        if(result == null && (searchTimedOut || searchLimitHit) &&
+        boolean directTimedOut = searchTimedOut;
+        boolean directLimitHit = searchLimitHit;
+
+        // Preserve v0.9.8's short warm-up retry for medium routes. It only runs
+        // after a safety timeout/expansion limit and never after a genuinely
+        // impossible route. Long routes skip this retry and go directly to the
+        // segmented fallback so they do not pay for two oversized searches.
+        if((directTimedOut || directLimitHit) &&
             manhattan(start.x, start.y, goal.x, goal.y) <= 250){
             searchRetryPass = true;
             searchTimedOut = false;
             searchLimitHit = false;
             result = findPathAttempt(start, goal);
+            if(result != null){
+                searchRetryPass = false;
+                return result;
+            }
+            directTimedOut = directTimedOut || searchTimedOut;
+            directLimitHit = directLimitHit || searchLimitHit;
         }
 
         searchRetryPass = false;
+
+        // Normal routes retain the fast single-search behavior. Only a route
+        // that would otherwise fail a mobile/desktop safety limit falls back to
+        // invisible automatic guide points. This mirrors the player's successful
+        // A -> B -> C workflow without adding visible waypoints.
+        if(directTimedOut || directLimitHit){
+            searchTimedOut = false;
+            searchLimitHit = false;
+
+            SegmentedSearchContext context = new SegmentedSearchContext(
+                System.nanoTime() + automaticSegmentBudgetNanos(),
+                automaticSegmentAttemptLimit()
+            );
+            result = findAutomaticallySegmentedPath(start, goal, context, 0);
+            if(result != null){
+                searchTimedOut = false;
+                searchLimitHit = false;
+                return result;
+            }
+
+            // Keep the original reason for the user-facing message. A failed
+            // automatic fallback must not disguise the initial timeout as a
+            // generic impossible-route result.
+            searchTimedOut = directTimedOut || context.deadlineHit;
+            searchLimitHit = directLimitHit || context.attemptLimitHit;
+        }
+
+        return null;
+    }
+
+    private PathResult findAutomaticallySegmentedPath(
+        Point2 start,
+        Point2 goal,
+        SegmentedSearchContext context,
+        int depth
+    ){
+        if(context == null || context.expired()) return null;
+
+        int distance = manhattan(start.x, start.y, goal.x, goal.y);
+        int targetLength = automaticSegmentLength();
+        int maxDepth = Vars.mobile ? 6 : 7;
+
+        if(distance <= targetLength || depth >= maxDepth){
+            if(!context.beginAttempt()) return null;
+            PathResult direct = findPathAttempt(start, goal);
+            if(direct != null) direct.automaticSections = 1;
+            return direct;
+        }
+
+        Seq<Point2> guides = automaticGuideCandidates(start, goal);
+        for(Point2 guide : guides){
+            if(context.expired()) return null;
+
+            PathResult first = findAutomaticallySegmentedPath(start, guide, context, depth + 1);
+            if(first == null) continue;
+
+            // Treat the completed first half as part of the current preview while
+            // searching the second half. This prevents the fallback from folding
+            // back over itself, while still allowing a deliberate perpendicular
+            // Junction crossing through the normal planned-route rules.
+            int temporaryRouteSize = routeTiles.size;
+            for(int i = 1; i < first.points.size; i++) addRouteTile(first.points.get(i));
+            PathResult second = findAutomaticallySegmentedPath(guide, goal, context, depth + 1);
+            restoreTemporaryRouteTiles(temporaryRouteSize);
+
+            if(second != null){
+                return mergePathResults(first, second);
+            }
+        }
+
+        return null;
+    }
+
+    private Seq<Point2> automaticGuideCandidates(Point2 start, Point2 goal){
+        Seq<GuideCandidate> ranked = new Seq<>();
+        int idealX = Math.round((start.x + goal.x) / 2f);
+        int idealY = Math.round((start.y + goal.y) / 2f);
+        int radius = automaticGuideRadius();
+        int directDistance = Math.max(1, manhattan(start.x, start.y, goal.x, goal.y));
+
+        for(int y = idealY - radius; y <= idealY + radius; y++){
+            for(int x = idealX - radius; x <= idealX + radius; x++){
+                if(!isAutomaticGuideUsable(x, y)) continue;
+
+                int fromStart = manhattan(start.x, start.y, x, y);
+                int toGoal = manhattan(x, y, goal.x, goal.y);
+                if(fromStart < 8 || toGoal < 8) continue;
+
+                float score = manhattan(x, y, idealX, idealY) * 4f;
+                score += Math.abs(fromStart - toGoal) * 0.45f;
+                score += Math.max(0, fromStart + toGoal - directDistance) * 0.35f;
+                score += automaticGuideBlockedNeighbours(x, y) * 2.5f;
+                if(findingAlternative && alternativePenaltyKeys.contains(tileKey(x, y))){
+                    score += 30f;
+                }
+
+                GuideCandidate candidate = new GuideCandidate(new Point2(x, y), score);
+                int insertAt = 0;
+                while(insertAt < ranked.size && ranked.get(insertAt).score <= score) insertAt++;
+                ranked.insert(insertAt, candidate);
+                if(ranked.size > 8) ranked.remove(ranked.size - 1);
+            }
+        }
+
+        Seq<Point2> result = new Seq<>();
+        for(GuideCandidate candidate : ranked){
+            result.add(candidate.point);
+        }
         return result;
+    }
+
+    private boolean isAutomaticGuideUsable(int x, int y){
+        Tile tile = Vars.world.tile(x, y);
+        if(tile == null || routeBlock == null) return false;
+
+        int key = tileKey(x, y);
+        if(forbiddenKeys.contains(key) || routeKeys.contains(key) || queuedPlansByKey.containsKey(key)) return false;
+        if(tile.build != null) return false;
+        if(oreMode != OreMode.allow && isProtectedOreTile(tile)) return false;
+        if(isBesideUnintendedItemOutput(x, y)) return false;
+        if(isFedByExistingTransport(x, y) && !isIntentionalConnectionOutputTile(x, y)) return false;
+
+        for(int rotation = 0; rotation < 4; rotation++){
+            if(Build.validPlace(routeBlock, Vars.player.team(), x, y, rotation)) return true;
+        }
+        return false;
+    }
+
+    private int automaticGuideBlockedNeighbours(int x, int y){
+        int blocked = 0;
+        for(int direction = 0; direction < 4; direction++){
+            int nx = x + dirX[direction];
+            int ny = y + dirY[direction];
+            Tile nearby = Vars.world.tile(nx, ny);
+            if(nearby == null || forbiddenKeys.contains(tileKey(nx, ny)) ||
+                (nearby.build != null && !isCompatibleTransport(nearby.block()))){
+                blocked++;
+            }
+        }
+        return blocked;
+    }
+
+    private void restoreTemporaryRouteTiles(int previousSize){
+        while(routeTiles.size > previousSize){
+            routeTiles.remove(routeTiles.size - 1);
+        }
+        routeKeys.clear();
+        for(Point2 point : routeTiles){
+            routeKeys.add(tileKey(point.x, point.y));
+        }
+    }
+
+    private PathResult mergePathResults(PathResult first, PathResult second){
+        if(first == null || second == null || first.points.isEmpty() || second.points.isEmpty()) return null;
+
+        PathResult merged = new PathResult();
+        for(Point2 point : first.points){
+            merged.points.add(new Point2(point.x, point.y));
+        }
+        for(int i = 1; i < second.points.size; i++){
+            Point2 point = second.points.get(i);
+            merged.points.add(new Point2(point.x, point.y));
+        }
+        for(BridgeLink bridge : first.bridges) merged.bridges.add(bridge.copy());
+        for(BridgeLink bridge : second.bridges) merged.bridges.add(bridge.copy());
+        for(Point2 junction : first.junctions) merged.junctions.add(new Point2(junction.x, junction.y));
+        for(Point2 junction : second.junctions) merged.junctions.add(new Point2(junction.x, junction.y));
+        merged.usedOreFallback = first.usedOreFallback || second.usedOreFallback;
+        merged.automaticSections = first.automaticSections + second.automaticSections;
+        return merged;
+    }
+
+    private int automaticSegmentLength(){
+        return Vars.mobile ? mobileAutomaticSegmentLength : desktopAutomaticSegmentLength;
+    }
+
+    private int automaticGuideRadius(){
+        return Vars.mobile ? mobileAutomaticGuideRadius : desktopAutomaticGuideRadius;
+    }
+
+    private int automaticSegmentAttemptLimit(){
+        return Vars.mobile ? mobileAutomaticSegmentAttempts : desktopAutomaticSegmentAttempts;
+    }
+
+    private long automaticSegmentBudgetNanos(){
+        return Vars.mobile ? mobileAutomaticSegmentBudgetNanos : desktopAutomaticSegmentBudgetNanos;
     }
 
     private PathResult findPathAttempt(Point2 start, Point2 goal){
@@ -3138,6 +3524,11 @@ public class AutoRouteMod extends Mod{
         if(routeKeys.contains(tileKey(nextX, nextY)) &&
             canCrossExistingPlannedRoute(nextX, nextY, nextDirection)){
             step += plannedRouteCrossingPenalty();
+        }
+
+        if(findingAlternative && alternativePenaltyKeys.contains(tileKey(nextX, nextY)) &&
+            !(nextX == goal.x && nextY == goal.y)){
+            step += alternativeRoutePenalty();
         }
 
         if(preference == RoutePreference.clean){
@@ -3610,16 +4001,22 @@ public class AutoRouteMod extends Mod{
     }
 
     private boolean validateIntentionalConnections(PathResult path, Point2 start, Point2 goal){
+        return validateIntentionalConnections(path, start, goal, true);
+    }
+
+    private boolean validateIntentionalConnections(PathResult path, Point2 start, Point2 goal, boolean announce){
         if(path == null || path.points.size < 2) return false;
 
         if(isConnectionEndpoint(start.x, start.y)){
             int required = direction(path.points.get(0), path.points.get(1));
             int existingRotation = connectionRotation(start.x, start.y);
             if(existingRotation != required){
-                showToast(
-                    "The starting transport block points another way. Use it as an end point, rotate it, or choose the tile in front of it.",
-                    5f
-                );
+                if(announce){
+                    showToast(
+                        "The starting transport block points another way. Use it as an end point, rotate it, or choose the tile in front of it.",
+                        5f
+                    );
+                }
                 return false;
             }
         }
@@ -3629,12 +4026,14 @@ public class AutoRouteMod extends Mod{
             int arrivalDirection = direction(path.points.get(path.points.size - 2), path.points.peek());
 
             if(!isValidConnectionArrival(goal.x, goal.y, arrivalDirection)){
-                showToast(
-                    requiresRearInput(target) ?
-                        "That armored endpoint only accepts a straight rear connection." :
-                        "That endpoint cannot accept a head-on connection. Connect from its rear or side.",
-                    5f
-                );
+                if(announce){
+                    showToast(
+                        requiresRearInput(target) ?
+                            "That armored endpoint only accepts a straight rear connection." :
+                            "That endpoint cannot accept a head-on connection. Connect from its rear or side.",
+                        5f
+                    );
+                }
                 return false;
             }
         }
@@ -3714,6 +4113,15 @@ public class AutoRouteMod extends Mod{
         };
     }
 
+    private float alternativeRoutePenalty(){
+        float base = switch(preference){
+            case shortest -> 7.5f;
+            case straight -> 11f;
+            case clean -> 16f;
+        };
+        return base + Math.max(0, alternativeSearchPass - 1) * 4f;
+    }
+
     private float nearbyInterferencePenalty(int x, int y){
         float penalty = 0f;
         for(int direction = 0; direction < 4; direction++){
@@ -3739,10 +4147,6 @@ public class AutoRouteMod extends Mod{
         return Vars.mobile ? mobileMaxSearchCells : desktopMaxSearchCells;
     }
 
-    private int maxWaypointDistance(){
-        return Vars.mobile ? 500 : 1000;
-    }
-
     private long searchBudgetNanos(){
         long millis = Vars.mobile ? 220L : 550L;
         if(searchRetryPass) millis = Vars.mobile ? 480L : 900L;
@@ -3761,7 +4165,8 @@ public class AutoRouteMod extends Mod{
             "|b=" + bridgesEnabled +
             "|f=" + forbiddenRevision +
             "|q=" + queuedPlanFingerprint +
-            "|r=" + routeHash;
+            "|r=" + routeHash +
+            "|a=" + (findingAlternative ? alternativePenaltyRevision : 0);
     }
 
     private void putPathCache(String key, PathResult result){
@@ -3833,6 +4238,61 @@ public class AutoRouteMod extends Mod{
 
         static RoutePreference fromOrdinal(int ordinal){
             return values()[Math.floorMod(ordinal, values().length)];
+        }
+    }
+
+    private static final class GuideCandidate{
+        final Point2 point;
+        final float score;
+
+        GuideCandidate(Point2 point, float score){
+            this.point = point;
+            this.score = score;
+        }
+    }
+
+    private static final class SegmentedSearchContext{
+        final long deadline;
+        final int attemptLimit;
+        int attempts;
+        boolean deadlineHit;
+        boolean attemptLimitHit;
+
+        SegmentedSearchContext(long deadline, int attemptLimit){
+            this.deadline = deadline;
+            this.attemptLimit = attemptLimit;
+        }
+
+        boolean expired(){
+            if(System.nanoTime() > deadline){
+                deadlineHit = true;
+                return true;
+            }
+            if(attempts >= attemptLimit){
+                attemptLimitHit = true;
+                return true;
+            }
+            return false;
+        }
+
+        boolean beginAttempt(){
+            if(expired()) return false;
+            attempts++;
+            return true;
+        }
+    }
+
+    private static final class RouteAlternative{
+        final RoutePreference preference;
+        final Seq<PathResult> segments = new Seq<>();
+        final String signature;
+
+        RouteAlternative(RoutePreference preference, Seq<PathResult> sourceSegments, String signature){
+            this.preference = preference;
+            this.signature = signature;
+            for(PathResult segment : sourceSegments){
+                segments.add(segment.copy());
+            }
         }
     }
 
@@ -3918,6 +4378,7 @@ public class AutoRouteMod extends Mod{
         final Seq<BridgeLink> bridges = new Seq<>();
         final Seq<Point2> junctions = new Seq<>();
         boolean usedOreFallback;
+        int automaticSections = 1;
 
         PathResult copy(){
             PathResult copy = new PathResult();
@@ -3931,6 +4392,7 @@ public class AutoRouteMod extends Mod{
                 copy.junctions.add(new Point2(junction.x, junction.y));
             }
             copy.usedOreFallback = usedOreFallback;
+            copy.automaticSections = automaticSections;
             return copy;
         }
     }

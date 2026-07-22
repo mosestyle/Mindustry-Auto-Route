@@ -49,6 +49,22 @@ Routers, Sorters, gates, Duct Routers, and compatible one-tile transport connect
 
 Selecting a tile that already uses the target tier is allowed: it remains part of the scan and connects older sections that still need replacement. Upgrades and downgrades both work, while special transport blocks are preserved rather than redesigned.
 
+## Version 0.9.9 highlights
+
+### Automatic long-route fallback
+
+Short and ordinary routes still use the same fast single calculation from v0.9.8. If that direct search would otherwise hit its Android/desktop safety limit, Auto Route now divides the difficult segment internally with safe **hidden guide points**. The player still taps only Point A and Point B, and the result remains one continuous preview.
+
+The hidden sections use the currently selected route preference—**Short**, **Straight**, or **Clean**—and preserve the existing ore, bridge, forbidden-tile, accidental-item-feed, Junction, and endpoint rules. They are not added to the visible waypoint list. A successful fallback briefly reports how many hidden sections were used.
+
+The fallback has its own strict time and attempt budgets. Normal successful routes do not run it at all, preventing the v0.9.7-style slowdown. If both the direct and automatic searches fail, the message asks for one manual waypoint near the difficult area instead of rejecting every long A-to-B request in advance.
+
+### On-demand “Try another route”
+
+The normal preview is still calculated only once. A small **↻** button now shares the existing Undo/Clear/Build row without increasing the panel height. Pressing it requests one genuinely different route using the **same current Short, Straight, or Clean mode**; no Cheapest or resource-cost mode was added.
+
+Up to three successful routes are cached. The first press calculates Route 2, the second can calculate Route 3, and later presses cycle through the cached previews instantly. If no further genuinely different route exists, the button stops searching and cycles the routes already found instead. The status uses a compact `R1/2` or `R2/3` marker. Changing a waypoint, option, forbidden area, selected transport block, or build-queue state clears stale alternatives and returns to one current route.
+
 ## Version 0.9.8 highlights
 
 ### Fast single-route preview restored
