@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0
+
+- Added **Upgrade existing line** mode for conveyor, duct, and conduit families.
+- Select the desired replacement block, enable Upgrade line in Auto Route options, then tap any existing compatible transport tile to identify and preview that connected lane.
+- Supports upgrades and downgrades, such as Conveyor → Titanium Conveyor or Titanium Conveyor → Conveyor.
+- Preserves routers, sorters, factories, cores, Junctions, Liquid Junctions, and bridge endpoints instead of replacing them.
+- Continues line detection straight through compatible Junction crossings and linked bridge pairs while preventing the perpendicular crossing lane from being absorbed.
+- Treats routers and other branching distribution blocks as boundaries, preventing separate copper and lead networks from being selected together through a shared router.
+- Added a mobile safety limit, highlighted preserved special blocks, all-at-once build validation, and automatic preview refresh when the selected line changes.
+
 ## 0.8.5
 
 - Reworked the Custom Music Library action buttons after the one-line labels caused icon/text overlap on narrow Android screens.

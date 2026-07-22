@@ -50,6 +50,7 @@ import java.util.PriorityQueue;
  * - awareness of existing local build plans;
  * - intentional connections to existing transport endpoints;
  * - mobile-oriented search limits and cached path results;
+ * - connected-line upgrades and downgrades that preserve special transport blocks;
  * - optional compact core-item, unit-count, and time-control HUD.
  */
 public class AutoRouteMod extends Mod{
@@ -69,6 +70,8 @@ public class AutoRouteMod extends Mod{
     private static final int pathCacheLimit = 32;
     private static final long mobileForbiddenHoldNanos = 350_000_000L;
     private static final float mobileForbiddenPanThreshold = 12f;
+    private static final int mobileUpgradeScanLimit = 900;
+    private static final int desktopUpgradeScanLimit = 3000;
 
     private static final String oreModeSetting = "mindustry-auto-route-ore-mode";
     private static final String legacyAvoidOreSetting = "mindustry-auto-route-avoid-ore";
@@ -86,6 +89,11 @@ public class AutoRouteMod extends Mod{
     private final IntSet routeKeys = new IntSet();
     private final IntSet waypointKeys = new IntSet();
     private final IntSet connectionWaypointKeys = new IntSet();
+
+    private final Seq<BuildPlan> upgradePlans = new Seq<>();
+    private final Seq<Point2> upgradeSpecialTiles = new Seq<>();
+    private final IntSet upgradeKeys = new IntSet();
+    private final IntSet upgradeSpecialKeys = new IntSet();
 
     private final Seq<Point2> forbiddenTiles = new Seq<>();
     private final IntSet forbiddenKeys = new IntSet();
@@ -105,9 +113,11 @@ public class AutoRouteMod extends Mod{
     private boolean compactPanelLayout = true;
     private boolean bridgesEnabled = true;
     private boolean editMode;
+    private boolean upgradeMode;
     private boolean searchTimedOut;
     private boolean searchLimitHit;
     private Block routeBlock;
+    private Point2 upgradeAnchor;
     private Point2 forbiddenAnchor;
     private Point2 forbiddenStrokeStart;
     private Point2 forbiddenStrokeLast;
@@ -128,6 +138,7 @@ public class AutoRouteMod extends Mod{
     private int smartBridges;
     private int oreFallbackSegments;
     private int connectionEndpoints;
+    private int upgradePreservedSpecials;
     private int forbiddenRevision;
     private int queuedPlanFingerprint;
     private int previewPlanFingerprint;
@@ -139,6 +150,7 @@ public class AutoRouteMod extends Mod{
     private TextButton forbiddenDrawButton;
     private TextButton bridgeButton;
     private TextButton editButton;
+    private TextButton upgradeButton;
     private TextButton optionsButton;
     private TextButton collapseButton;
     private Table optionsTable;
@@ -167,7 +179,9 @@ public class AutoRouteMod extends Mod{
 
         Events.on(EventType.TapEvent.class, event -> {
             if(!active || forbidMode || event.tile == null || event.player != Vars.player || Vars.state.isMenu()) return;
-            if(editMode){
+            if(upgradeMode){
+                selectUpgradeLine(event.tile);
+            }else if(editMode){
                 handleRouteEditTap(event.tile);
             }else{
                 addWaypoint(event.tile);
@@ -490,6 +504,7 @@ public class AutoRouteMod extends Mod{
         routePanel.defaults().pad(2f);
         optionsButton = null;
         optionsTable = null;
+        upgradeButton = null;
 
         Table header = new Table();
         header.defaults().pad(2f);
@@ -651,6 +666,20 @@ public class AutoRouteMod extends Mod{
             .width(cellWidth)
             .height(cellHeight);
 
+        optionsTable.row();
+        upgradeButton = optionsTable.button("", Styles.clearTogglet, this::toggleUpgradeMode)
+            .colspan(2)
+            .width(cellWidth * 2f + 4f)
+            .height(cellHeight)
+            .get();
+        upgradeButton.update(() -> {
+            upgradeButton.setChecked(upgradeMode);
+            upgradeButton.setText(upgradeMode ?
+                "[accent]Upgrade line:[] tap existing transport" :
+                "[accent]Upgrade line:[] off"
+            );
+        });
+
         if(forbidMode){
             optionsTable.row();
 
@@ -733,6 +762,20 @@ public class AutoRouteMod extends Mod{
             .width(width)
             .height(height)
             .left();
+        optionsTable.row();
+
+        upgradeButton = optionsTable.button("", Styles.clearTogglet, this::toggleUpgradeMode)
+            .width(width)
+            .height(height)
+            .left()
+            .get();
+        upgradeButton.update(() -> {
+            upgradeButton.setChecked(upgradeMode);
+            upgradeButton.setText(upgradeMode ?
+                "[accent]Upgrade existing line:[] tap a transport block" :
+                "[accent]Upgrade existing line:[] off"
+            );
+        });
 
         if(forbidMode){
             optionsTable.row();
@@ -936,6 +979,13 @@ public class AutoRouteMod extends Mod{
 
     private String statusText(){
         if(routeBlock == null) return "[accent]Auto Route[]";
+        if(upgradeMode){
+            if(upgradeAnchor == null){
+                return "[accent]Upgrade to " + routeBlock.localizedName + "[]\nTap an existing line";
+            }
+            return "[accent]Upgrade to " + routeBlock.localizedName + "[]\n" +
+                upgradePlans.size + " replacements • " + upgradePreservedSpecials + " kept";
+        }
         if(forbidMode){
             String action = forbiddenDrawMarks ? "Mark" : "Erase";
             String hint = forbiddenAnchor == null ? "Tap Point A or drag" : "Tap next point or drag";
@@ -982,6 +1032,8 @@ public class AutoRouteMod extends Mod{
         active = true;
         forbidMode = false;
         editMode = false;
+        upgradeMode = false;
+        upgradeAnchor = null;
         selectedWaypointIndex = -1;
         forbiddenAnchor = null;
         resetForbiddenStroke();
@@ -1001,6 +1053,8 @@ public class AutoRouteMod extends Mod{
         active = false;
         forbidMode = false;
         editMode = false;
+        upgradeMode = false;
+        upgradeAnchor = null;
         selectedWaypointIndex = -1;
         forbiddenAnchor = null;
         resetForbiddenStroke();
@@ -1015,6 +1069,8 @@ public class AutoRouteMod extends Mod{
         active = false;
         forbidMode = false;
         editMode = false;
+        upgradeMode = false;
+        upgradeAnchor = null;
         selectedWaypointIndex = -1;
         forbiddenAnchor = null;
         resetForbiddenStroke();
@@ -1068,11 +1124,327 @@ public class AutoRouteMod extends Mod{
         selectedWaypointIndex = -1;
         if(editMode){
             forbidMode = false;
+            upgradeMode = false;
+            clearUpgradeSelection();
             forbiddenAnchor = null;
             resetForbiddenStroke();
             showToast("Tap a waypoint, then tap its new tile. The neighboring route sections will be recalculated.", 5f);
         }
         rebuildOptionsTable();
+    }
+
+    private void toggleUpgradeMode(){
+        upgradeMode = !upgradeMode;
+        clearRoute();
+        forbidMode = false;
+        editMode = false;
+        selectedWaypointIndex = -1;
+        forbiddenAnchor = null;
+        resetForbiddenStroke();
+
+        if(upgradeMode){
+            showToast(
+                "Upgrade mode enabled. Tap any existing compatible transport tile to preview that connected line.",
+                5f
+            );
+        }
+        rebuildOptionsTable();
+    }
+
+    private void selectUpgradeLine(Tile tile){
+        if(!upgradeMode || routeBlock == null || tile == null) return;
+        if(!isUpgradeableTransportTile(tile)){
+            showToast(
+                "Tap an existing friendly " + upgradeFamilyName() + " tile. Routers, junctions and bridges are preserved, not selected directly.",
+                5f
+            );
+            return;
+        }
+
+        clearUpgradeSelection();
+        upgradeAnchor = new Point2(tile.x, tile.y);
+        scanUpgradeLine(tile);
+
+        if(upgradePlans.isEmpty()){
+            showToast(
+                "This connected line already uses " + routeBlock.localizedName + ", or its remaining blocks cannot be replaced.",
+                4f
+            );
+        }else{
+            showToast(
+                "Found " + upgradePlans.size + " block" + (upgradePlans.size == 1 ? "" : "s") +
+                    " to replace. " + upgradePreservedSpecials + " special block" +
+                    (upgradePreservedSpecials == 1 ? " was" : "s were") + " preserved.",
+                5f
+            );
+        }
+    }
+
+    private void scanUpgradeLine(Tile start){
+        refreshQueuedPlanSnapshot();
+
+        Seq<Tile> open = new Seq<>();
+        IntSet visited = new IntSet();
+        open.add(start);
+        visited.add(tileKey(start.x, start.y));
+
+        int cursor = 0;
+        int limit = Vars.mobile ? mobileUpgradeScanLimit : desktopUpgradeScanLimit;
+        int skipped = 0;
+
+        while(cursor < open.size && visited.size < limit){
+            Tile current = open.get(cursor++);
+            int key = tileKey(current.x, current.y);
+            upgradeKeys.add(key);
+
+            BuildPlan queued = queuedPlansByKey.get(key);
+            boolean alreadyQueued = queued != null && queued.block == routeBlock;
+            if(current.block() != routeBlock && !alreadyQueued){
+                int rotation = current.build == null ? 0 : current.build.rotation;
+                BuildPlan plan = new BuildPlan(current.x, current.y, rotation, routeBlock);
+                if(Build.validPlace(routeBlock, Vars.player.team(), current.x, current.y, rotation)){
+                    upgradePlans.add(plan);
+                }else{
+                    skipped++;
+                }
+            }
+
+            for(int direction = 0; direction < 4; direction++){
+                Tile adjacent = Vars.world.tile(
+                    current.x + dirX[direction],
+                    current.y + dirY[direction]
+                );
+                if(adjacent == null || adjacent.build == null || adjacent.team() != Vars.player.team()) continue;
+
+                if(isUpgradeableTransportTile(adjacent)){
+                    if(upgradeBlocksDirectlyConnected(current, adjacent)){
+                        enqueueUpgradeTile(adjacent, open, visited);
+                    }
+                    continue;
+                }
+
+                if(isCompatibleUpgradeJunction(adjacent)){
+                    addAcrossUpgradeJunction(current, adjacent, direction, open, visited);
+                    continue;
+                }
+
+                if(isCompatibleUpgradeBridge(adjacent)){
+                    addAcrossUpgradeBridge(current, adjacent, open, visited);
+                }
+                // Routers, sorters, factories, cores and other branching blocks
+                // deliberately stop the scan so a copper line does not absorb a
+                // neighboring lead network through a shared distribution block.
+            }
+        }
+
+        upgradePreservedSpecials = upgradeSpecialTiles.size;
+
+        if(visited.size >= limit && cursor < open.size){
+            showToast(
+                "The connected network reached the " + limit + "-tile safety limit. Only the highlighted part was selected.",
+                5f
+            );
+        }else if(skipped > 0){
+            showToast(
+                skipped + " transport block" + (skipped == 1 ? " could" : "s could") +
+                    " not be replaced and were left unchanged.",
+                4f
+            );
+        }
+    }
+
+    private void enqueueUpgradeTile(Tile tile, Seq<Tile> open, IntSet visited){
+        if(tile == null || !isUpgradeableTransportTile(tile)) return;
+        int key = tileKey(tile.x, tile.y);
+        if(visited.contains(key)) return;
+        visited.add(key);
+        open.add(tile);
+    }
+
+    private boolean isUpgradeableTransportTile(Tile tile){
+        return tile != null && tile.build != null && tile.team() == Vars.player.team() &&
+            isCompatibleTransport(tile.block());
+    }
+
+    private boolean upgradeBlocksDirectlyConnected(Tile first, Tile second){
+        return upgradePointsTo(first, second) || upgradePointsTo(second, first);
+    }
+
+    private boolean upgradePointsTo(Tile source, Tile destination){
+        if(source == null || destination == null || source.build == null) return false;
+        int rotation = source.build.rotation;
+        return source.x + dirX[rotation] == destination.x &&
+            source.y + dirY[rotation] == destination.y;
+    }
+
+    private boolean isCompatibleUpgradeJunction(Tile tile){
+        if(tile == null || tile.build == null || tile.team() != Vars.player.team()) return false;
+        Block replacement = junctionReplacement();
+        return replacement != null && tile.block() == replacement;
+    }
+
+    private void addAcrossUpgradeJunction(Tile current, Tile junction, int direction,
+                                          Seq<Tile> open, IntSet visited){
+        Tile opposite = Vars.world.tile(
+            junction.x + dirX[direction],
+            junction.y + dirY[direction]
+        );
+        if(!isUpgradeableTransportTile(opposite)) return;
+
+        int reverse = Math.floorMod(direction + 2, 4);
+        int currentRotation = current.build.rotation;
+        int oppositeRotation = opposite.build.rotation;
+
+        // A Junction carries each lane straight through. Requiring equal flow
+        // direction prevents the perpendicular crossing from being selected.
+        boolean sameForwardLane = currentRotation == direction && oppositeRotation == direction;
+        boolean sameReverseLane = currentRotation == reverse && oppositeRotation == reverse;
+        if(!sameForwardLane && !sameReverseLane) return;
+
+        markUpgradeSpecial(junction);
+        enqueueUpgradeTile(opposite, open, visited);
+    }
+
+    private boolean isCompatibleUpgradeBridge(Tile tile){
+        if(tile == null || tile.build == null || tile.team() != Vars.player.team()) return false;
+        Block block = tile.block();
+        if(!(block instanceof ItemBridge) && !(block instanceof DirectionBridge)) return false;
+        return routeBlock instanceof Conduit ? block.hasLiquids : block.hasItems;
+    }
+
+    private void addAcrossUpgradeBridge(Tile current, Tile endpoint,
+                                        Seq<Tile> open, IntSet visited){
+        if(endpoint.build instanceof ItemBridge.ItemBridgeBuild bridge){
+            Tile linked = Vars.world.tile(bridge.link);
+            if(isCompatibleUpgradeBridge(linked)){
+                addUpgradeBridgePair(current, endpoint, linked, open, visited);
+            }
+
+            for(int i = 0; i < bridge.incoming.size; i++){
+                Tile incoming = Vars.world.tile(bridge.incoming.items[i]);
+                if(isCompatibleUpgradeBridge(incoming)){
+                    addUpgradeBridgePair(current, incoming, endpoint, open, visited);
+                }
+            }
+            return;
+        }
+
+        if(endpoint.build instanceof DirectionBridge.DirectionBridgeBuild bridge){
+            DirectionBridge.DirectionBridgeBuild linked = bridge.findLink();
+            if(linked != null && linked.tile != null){
+                addUpgradeBridgePair(current, endpoint, linked.tile, open, visited);
+            }
+
+            for(DirectionBridge.DirectionBridgeBuild incoming : bridge.occupied){
+                if(incoming != null && incoming.tile != null){
+                    addUpgradeBridgePair(current, incoming.tile, endpoint, open, visited);
+                }
+            }
+        }
+    }
+
+    private void addUpgradeBridgePair(Tile current, Tile source, Tile destination,
+                                      Seq<Tile> open, IntSet visited){
+        if(source == null || destination == null || source == destination) return;
+        if(source.x != destination.x && source.y != destination.y) return;
+
+        int direction = direction(
+            new Point2(source.x, source.y),
+            new Point2(destination.x, destination.y)
+        );
+
+        Tile input = Vars.world.tile(
+            source.x - dirX[direction],
+            source.y - dirY[direction]
+        );
+        Tile output = Vars.world.tile(
+            destination.x + dirX[direction],
+            destination.y + dirY[direction]
+        );
+        if(!isUpgradeableTransportTile(input) || !isUpgradeableTransportTile(output)) return;
+        if(input.build.rotation != direction || output.build.rotation != direction) return;
+
+        boolean currentIsInput = current.x == input.x && current.y == input.y;
+        boolean currentIsOutput = current.x == output.x && current.y == output.y;
+        if(!currentIsInput && !currentIsOutput) return;
+
+        markUpgradeSpecial(source);
+        markUpgradeSpecial(destination);
+        enqueueUpgradeTile(currentIsInput ? output : input, open, visited);
+    }
+
+    private void markUpgradeSpecial(Tile tile){
+        if(tile == null) return;
+        int key = tileKey(tile.x, tile.y);
+        if(upgradeSpecialKeys.contains(key)) return;
+        upgradeSpecialKeys.add(key);
+        upgradeSpecialTiles.add(new Point2(tile.x, tile.y));
+    }
+
+    private String upgradeFamilyName(){
+        if(routeBlock instanceof Conveyor) return "conveyor";
+        if(routeBlock instanceof Duct) return "duct";
+        if(routeBlock instanceof Conduit) return "conduit";
+        return "transport";
+    }
+
+    private boolean isUpgradePlanUsable(BuildPlan plan){
+        if(plan == null || plan.block != routeBlock) return false;
+        Tile tile = Vars.world.tile(plan.x, plan.y);
+        if(!isUpgradeableTransportTile(tile) || tile.block() == routeBlock) return false;
+        return Build.validPlace(routeBlock, Vars.player.team(), plan.x, plan.y, plan.rotation);
+    }
+
+    private void commitUpgradeLine(){
+        if(upgradeAnchor == null){
+            showToast("Tap an existing transport line before pressing Build.", 3f);
+            return;
+        }
+        if(upgradePlans.isEmpty()){
+            showToast("There are no transport blocks to replace on this selected line.", 3f);
+            return;
+        }
+        if(Vars.player == null || Vars.player.unit() == null){
+            showToast("No player unit is available to build the upgrade.", 3f);
+            return;
+        }
+
+        for(BuildPlan plan : upgradePlans){
+            if(!isUpgradePlanUsable(plan)){
+                Tile anchorTile = Vars.world.tile(upgradeAnchor.x, upgradeAnchor.y);
+                if(isUpgradeableTransportTile(anchorTile)){
+                    clearUpgradeSelection();
+                    upgradeAnchor = new Point2(anchorTile.x, anchorTile.y);
+                    scanUpgradeLine(anchorTile);
+                    showToast("The line changed. The upgrade preview was refreshed; review it and tap Build again.", 5f);
+                }else{
+                    clearUpgradeSelection();
+                    showToast("The selected transport line no longer exists.", 4f);
+                }
+                return;
+            }
+        }
+
+        int queued = upgradePlans.size;
+        for(BuildPlan plan : upgradePlans){
+            Vars.player.unit().addBuild(plan.copy());
+        }
+
+        showToast(
+            "Queued " + queued + " replacement" + (queued == 1 ? "" : "s") +
+                " to " + routeBlock.localizedName + ". Special transport blocks were preserved.",
+            5f
+        );
+        clearUpgradeSelection();
+    }
+
+    private void clearUpgradeSelection(){
+        upgradeAnchor = null;
+        upgradePlans.clear();
+        upgradeSpecialTiles.clear();
+        upgradeKeys.clear();
+        upgradeSpecialKeys.clear();
+        upgradePreservedSpecials = 0;
     }
 
     private void handleRouteEditTap(Tile tile){
@@ -1181,6 +1553,8 @@ public class AutoRouteMod extends Mod{
         forbidMode = !forbidMode;
         if(forbidMode){
             editMode = false;
+            upgradeMode = false;
+            clearUpgradeSelection();
             selectedWaypointIndex = -1;
         }
         forbiddenAnchor = null;
@@ -1394,6 +1768,10 @@ public class AutoRouteMod extends Mod{
     }
 
     private void undoWaypoint(){
+        if(upgradeMode){
+            clearUpgradeSelection();
+            return;
+        }
         if(waypoints.isEmpty()) return;
 
         if(waypoints.size == 1){
@@ -1415,6 +1793,7 @@ public class AutoRouteMod extends Mod{
         routeKeys.clear();
         waypointKeys.clear();
         connectionWaypointKeys.clear();
+        clearUpgradeSelection();
         smartCrossings = 0;
         smartBridges = 0;
         oreFallbackSegments = 0;
@@ -1580,6 +1959,10 @@ public class AutoRouteMod extends Mod{
 
     private void commitRoute(){
         if(routeBlock == null) return;
+        if(upgradeMode){
+            commitUpgradeLine();
+            return;
+        }
         if(waypoints.size < 2){
             showToast("Tap Point B before building the route.", 3f);
             return;
@@ -1785,6 +2168,20 @@ public class AutoRouteMod extends Mod{
                     Drawf.square(waypointTile.drawx(), waypointTile.drawy(), size, Pal.accent);
                 }
             }
+        }
+
+        if(upgradeMode){
+            for(Point2 special : upgradeSpecialTiles){
+                Tile specialTile = Vars.world.tile(special.x, special.y);
+                if(specialTile != null){
+                    Drawf.square(specialTile.drawx(), specialTile.drawy(), Vars.tilesize / 2f + 1f, Pal.accent);
+                }
+            }
+            for(BuildPlan plan : upgradePlans){
+                plan.animScale = 1f;
+                plan.block.drawPlan(plan, upgradePlans, isUpgradePlanUsable(plan), 1f);
+            }
+            return;
         }
 
         for(BuildPlan plan : routePlans){
